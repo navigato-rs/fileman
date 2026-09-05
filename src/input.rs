@@ -356,7 +356,9 @@ fn move_to_trash(path: &Path) -> anyhow::Result<()> {
 /// Escape a path for embedding inside an AppleScript double-quoted string.
 #[cfg(target_os = "macos")]
 fn applescript_escape(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"")
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
 }
 
 /// Invoke the Windows shell "properties" dialog for `path`.
@@ -393,9 +395,8 @@ fn shell_properties_dialog(path: &Path) -> anyhow::Result<()> {
     const SEE_MASK_INVOKEIDLIST: u32 = 0x0000000C;
     const SW_SHOW: i32 = 5;
 
-    let to_wide = |s: &std::ffi::OsStr| -> Vec<u16> {
-        s.encode_wide().chain(std::iter::once(0)).collect()
-    };
+    let to_wide =
+        |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain(std::iter::once(0)).collect() };
     let verb = to_wide(std::ffi::OsStr::new("properties"));
     let file = to_wide(path.as_os_str());
 
@@ -1258,7 +1259,9 @@ pub(crate) fn handle_keyboard(
             }
         }
     }
-    if input.key_pressed(egui::Key::ArrowUp) && active_is_browser && !arrow_shift(egui::Key::ArrowUp)
+    if input.key_pressed(egui::Key::ArrowUp)
+        && active_is_browser
+        && !arrow_shift(egui::Key::ArrowUp)
     {
         if app.theme_picker_open() {
             app.select_prev_theme();

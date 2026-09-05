@@ -811,11 +811,13 @@ pub fn draw_panel(
                                                     ui.close();
                                                 }
                                                 if ui.button("Open with default app").clicked() {
-                                                    context_action = Some((idx, RowAction::OpenWith));
+                                                    context_action =
+                                                        Some((idx, RowAction::OpenWith));
                                                     ui.close();
                                                 }
                                                 if is_fs {
-                                                    if ui.button("Reveal in file manager").clicked() {
+                                                    if ui.button("Reveal in file manager").clicked()
+                                                    {
                                                         context_action =
                                                             Some((idx, RowAction::Reveal));
                                                         ui.close();

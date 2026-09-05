@@ -5369,7 +5369,12 @@ mod tests {
             &mut browser,
             core::DirBatch::Error("permission denied".to_string()),
         );
-        assert!(browser.entries.iter().any(|e| e.name == "permission denied"));
+        assert!(
+            browser
+                .entries
+                .iter()
+                .any(|e| e.name == "permission denied")
+        );
         assert!(!browser.entries.iter().any(|e| e.name == "a.txt"));
     }
 }

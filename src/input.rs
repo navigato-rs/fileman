@@ -1460,6 +1460,15 @@ pub(crate) fn confirm_pending_op(app: &mut app_state::AppState) {
             }
             let parent = first.parent().unwrap_or_else(|| std::path::Path::new("."));
             if let Some(next_name) = next_name {
+                // Move the cursor onto the surviving neighbor now so it stays
+                // put across the async delete and the refresh that follows —
+                // the post-delete reload restores selection by name, which works
+                // for remote and container listings too (fs_last_selected_name
+                // is keyed by local path and doesn't cover those).
+                let browser = app.get_active_panel_mut().browser_mut();
+                if let Some(idx) = browser.entries.iter().position(|e| e.name == next_name) {
+                    browser.selected_index = idx;
+                }
                 app.fs_last_selected_name
                     .insert(parent.to_path_buf(), next_name);
             } else {
@@ -1524,7 +1533,8 @@ pub(crate) fn confirm_pending_op(app: &mut app_state::AppState) {
             }
             app_state::PendingOp::Rename { .. } => refresh_fs_panels(app),
             app_state::PendingOp::Delete { .. } => {
-                store_neighbor_selection(app);
+                // Cursor was already moved onto the neighbor above; the reload
+                // restores it by name.
                 refresh_active_panel(app);
             }
             app_state::PendingOp::Pack { .. } => refresh_active_panel(app),

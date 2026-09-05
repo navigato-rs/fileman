@@ -1,0 +1,18 @@
+(
+  root: "tests/data/basic",
+  keys: [
+    (key: "Wait"),
+    // Put the cursor on a middle entry.
+    (key: "select:binary.bin"),
+    // Delete it and confirm.
+    (key: "F8"),
+    (key: "Enter"),
+    (key: "Wait"),
+  ],
+  asserts: (
+    left_panel: Some((
+      // Cursor stays at the same position: the entry that followed binary.bin.
+      selected: Some("source.txt"),
+    )),
+  ),
+)

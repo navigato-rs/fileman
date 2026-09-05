@@ -699,7 +699,9 @@ impl AppState {
         AsyncStatus {
             io_in_flight: self.io_in_flight,
             io_cancel_requested: self.io_cancel_requested,
-            dir_size_pending: self.dir_size_pending.len(),
+            // Include remote folder-size jobs so the "dir" indicator lights for
+            // remote directories too, not only local ones.
+            dir_size_pending: self.dir_size_pending.len() + self.remote_dir_size_pending.len(),
             search: self.search_status,
             update: self.update_status.clone(),
             gpu_info: self.gpu_info.clone(),

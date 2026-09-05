@@ -666,7 +666,9 @@ pub(crate) fn handle_keyboard(
     let f2 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F2));
 
     let f1 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1));
-    if f1 || ctrl_h {
+    // Bare F1 only — `consume_key(NONE, …)` matches any modifiers, so guard
+    // against Ctrl/Shift/Alt+F1 doing anything (Ctrl+H is the modified path).
+    if (f1 && input.modifiers.is_none()) || ctrl_h {
         app.toggle_help();
         ctx.request_repaint();
         return;
@@ -1023,7 +1025,8 @@ pub(crate) fn handle_keyboard(
         open_selected(app);
     }
     let ctrl_r = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::R));
-    if ctrl_r || f2 {
+    // Bare F2 only (see the F1 note above); Ctrl+R is the modified path.
+    if ctrl_r || (f2 && input.modifiers.is_none()) {
         refresh_active_panel(app);
     }
     let space = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));

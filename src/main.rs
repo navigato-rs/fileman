@@ -1854,35 +1854,42 @@ fn load_sftp_directory_async(
 
     let panel = app.panel_mut(target_panel);
     let browser = panel.browser_mut();
+    let same_dir = browser.current_path == synthetic;
     browser.browser_mode = core::BrowserMode::Remote {
         host: host.to_string(),
         path: remote_path.to_string(),
     };
     browser.current_path = synthetic.clone();
-    browser.entries.clear();
-    // Show a "Loading..." placeholder so the user sees immediate feedback
-    browser.entries.push(core::DirEntry {
-        name: "Loading...".to_string(),
-        is_dir: false,
-        is_symlink: false,
-        link_target: None,
-        location: core::EntryLocation::Remote {
-            host: host.to_string(),
-            path: remote_path.to_string(),
-        },
-        size: None,
-        modified: None,
-    });
-    browser.selected_index = 0;
-    browser.top_index = 0;
+    // On a same-directory reload keep the current listing on screen and refresh
+    // it in place; only blank to a "Loading..." placeholder when moving into a
+    // different directory, where there's nothing worth keeping.
+    if !same_dir {
+        browser.entries.clear();
+        browser.entries.push(core::DirEntry {
+            name: "Loading...".to_string(),
+            is_dir: false,
+            is_symlink: false,
+            link_target: None,
+            location: core::EntryLocation::Remote {
+                host: host.to_string(),
+                path: remote_path.to_string(),
+            },
+            size: None,
+            modified: None,
+        });
+        browser.selected_index = 0;
+        browser.top_index = 0;
+    }
     browser.dir_token = browser.dir_token.wrapping_add(1);
     browser.load = app_state::LoadState::start(rx, browser.dir_token);
     browser.prefer_select_name = prefer_name;
     browser.container_root = None;
     browser.watching_archive = None;
 
-    // Fresh load — stream for snappy first-paint, not atomic.
-    spawn_sftp_load_thread(session, host_owned, path_owned, tx, wake, false);
+    // Stream for snappy first-paint when entering a new directory; on a same-dir
+    // reload buffer atomically so entries swap in one shot (apply_dir_batch
+    // skips the swap entirely when the listing is unchanged).
+    spawn_sftp_load_thread(session, host_owned, path_owned, tx, wake, same_dir);
 }
 
 /// Spawn the SFTP directory-streaming loader thread. Shared between the

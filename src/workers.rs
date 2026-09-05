@@ -983,6 +983,10 @@ pub fn start_preview_worker(
                     let progress = transfer_progress.clone();
                     thread::spawn(move || match location {
                         EntryLocation::Fs(path) => {
+                            if crate::core::is_video_path(&path) {
+                                let _ = result_tx.send((id, PreviewContent::Text(video_preview(&path))));
+                                return;
+                            }
                             let force_text = is_text_path(&path);
                             let file = File::open(&path);
                             if let Ok(file) = file {
@@ -1243,6 +1247,46 @@ fn send_streaming_preview<R: Read>(
     }
 
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+/// Metadata-only preview for a local video file: size, plus duration and
+/// resolution for MP4/MOV containers (other formats show size only).
+fn video_preview(path: &Path) -> String {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("<video>");
+    let mut lines = vec![format!("Video: {name}")];
+    if let Ok(size) = std::fs::metadata(path).map(|m| m.len()) {
+        lines.push(format!("Size: {}", crate::core::format_size(size)));
+    }
+    match File::open(path).and_then(|mut f| crate::core::read_mp4_info(&mut f)) {
+        Ok(info) => {
+            if let Some(secs) = info.duration_secs {
+                lines.push(format!("Duration: {}", fmt_duration(secs)));
+            }
+            if let (Some(w), Some(h)) = (info.width, info.height) {
+                lines.push(format!("Resolution: {w}×{h}"));
+            }
+            if info.duration_secs.is_none() && info.width.is_none() {
+                lines.push(String::new());
+                lines.push("(No embedded metadata for this container format.)".to_string());
+            }
+        }
+        Err(e) => lines.push(format!("(Could not read metadata: {e})")),
+    }
+    lines.join("\n")
+}
+
+fn fmt_duration(secs: f64) -> String {
+    let total = secs.max(0.0) as u64;
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

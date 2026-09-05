@@ -692,6 +692,131 @@ pub fn is_video_name(name: &str) -> bool {
     is_video_path(Path::new(name))
 }
 
+/// Basic video metadata parsed from an ISO-BMFF (MP4/MOV/M4V) stream. Other
+/// containers (mkv, avi, webm, …) aren't parsed and leave the fields `None`.
+#[derive(Default)]
+pub struct VideoInfo {
+    pub duration_secs: Option<f64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// Parse duration and pixel dimensions by walking the `moov` box for `mvhd`
+/// (duration) and the first video `tkhd` (dimensions). Reads only atom headers
+/// plus a couple of small boxes, so it stays cheap even for large files.
+pub fn read_mp4_info<R: std::io::Read + std::io::Seek>(r: &mut R) -> std::io::Result<VideoInfo> {
+    let end = r.seek(std::io::SeekFrom::End(0))?;
+    let mut info = VideoInfo::default();
+    walk_mp4_atoms(r, 0, end, &mut info, 0)?;
+    Ok(info)
+}
+
+fn walk_mp4_atoms<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    start: u64,
+    end: u64,
+    info: &mut VideoInfo,
+    depth: u32,
+) -> std::io::Result<()> {
+    use std::io::SeekFrom;
+    if depth > 4 {
+        return Ok(());
+    }
+    let mut pos = start;
+    while pos + 8 <= end {
+        r.seek(SeekFrom::Start(pos))?;
+        let mut hdr = [0u8; 8];
+        if r.read_exact(&mut hdr).is_err() {
+            break;
+        }
+        let mut size = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as u64;
+        let typ = [hdr[4], hdr[5], hdr[6], hdr[7]];
+        let mut header = 8u64;
+        if size == 1 {
+            let mut big = [0u8; 8];
+            if r.read_exact(&mut big).is_err() {
+                break;
+            }
+            size = u64::from_be_bytes(big);
+            header = 16;
+        } else if size == 0 {
+            size = end - pos;
+        }
+        if size < header || pos + size > end {
+            break;
+        }
+        let body = pos + header;
+        let body_end = pos + size;
+        match &typ {
+            b"moov" | b"trak" | b"mdia" => walk_mp4_atoms(r, body, body_end, info, depth + 1)?,
+            // Leaf boxes: ignore parse errors so a truncated box doesn't lose
+            // whatever was already collected.
+            b"mvhd" => {
+                let _ = read_mvhd(r, body, info);
+            }
+            b"tkhd" => {
+                let _ = read_tkhd(r, body, info);
+            }
+            _ => {}
+        }
+        pos = body_end;
+    }
+    Ok(())
+}
+
+fn read_mvhd<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    body: u64,
+    info: &mut VideoInfo,
+) -> std::io::Result<()> {
+    r.seek(std::io::SeekFrom::Start(body))?;
+    let mut ver = [0u8; 4];
+    r.read_exact(&mut ver)?;
+    let (timescale, duration) = if ver[0] == 1 {
+        let mut buf = [0u8; 28]; // creation(8) mod(8) timescale(4) duration(8)
+        r.read_exact(&mut buf)?;
+        let ts = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
+        let dur = u64::from_be_bytes([
+            buf[20], buf[21], buf[22], buf[23], buf[24], buf[25], buf[26], buf[27],
+        ]);
+        (ts, dur)
+    } else {
+        let mut buf = [0u8; 16]; // creation(4) mod(4) timescale(4) duration(4)
+        r.read_exact(&mut buf)?;
+        let ts = u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]);
+        let dur = u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]) as u64;
+        (ts, dur)
+    };
+    if timescale > 0 {
+        info.duration_secs = Some(duration as f64 / timescale as f64);
+    }
+    Ok(())
+}
+
+fn read_tkhd<R: std::io::Read + std::io::Seek>(
+    r: &mut R,
+    body: u64,
+    info: &mut VideoInfo,
+) -> std::io::Result<()> {
+    use std::io::SeekFrom;
+    r.seek(SeekFrom::Start(body))?;
+    let mut ver = [0u8; 4];
+    r.read_exact(&mut ver)?;
+    // Bytes between the version/flags and the trailing width/height pair.
+    let skip: i64 = if ver[0] == 1 { 84 } else { 72 };
+    r.seek(SeekFrom::Current(skip))?;
+    let mut wh = [0u8; 8]; // width, height as 16.16 fixed-point
+    r.read_exact(&mut wh)?;
+    let w = u32::from_be_bytes([wh[0], wh[1], wh[2], wh[3]]) >> 16;
+    let h = u32::from_be_bytes([wh[4], wh[5], wh[6], wh[7]]) >> 16;
+    // The first track with real pixel dimensions is the video track.
+    if w > 0 && h > 0 && info.width.is_none() {
+        info.width = Some(w);
+        info.height = Some(h);
+    }
+    Ok(())
+}
+
 pub fn is_media_name(name: &str) -> bool {
     is_image_name(name) || is_audio_name(name) || is_video_name(name)
 }
@@ -890,6 +1015,34 @@ pub fn is_probably_text(bytes: &[u8]) -> bool {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn mp4_box(typ: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut v = ((8 + data.len()) as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(typ);
+        v.extend_from_slice(data);
+        v
+    }
+
+    #[test]
+    fn read_mp4_info_extracts_duration_and_resolution() {
+        // mvhd v0: version/flags(4) creation(4) mod(4) timescale=1000 duration=5000
+        let mut mvhd = vec![0u8; 12];
+        mvhd.extend_from_slice(&1000u32.to_be_bytes());
+        mvhd.extend_from_slice(&5000u32.to_be_bytes());
+        // tkhd v0: version/flags(4) + 72 bytes + width(16.16) + height(16.16)
+        let mut tkhd = vec![0u8; 76];
+        tkhd.extend_from_slice(&(1920u32 << 16).to_be_bytes());
+        tkhd.extend_from_slice(&(1080u32 << 16).to_be_bytes());
+        let trak = mp4_box(b"trak", &mp4_box(b"tkhd", &tkhd));
+        let mut moov_body = mp4_box(b"mvhd", &mvhd);
+        moov_body.extend_from_slice(&trak);
+        let file = mp4_box(b"moov", &moov_body);
+
+        let info = read_mp4_info(&mut std::io::Cursor::new(file)).unwrap();
+        assert_eq!(info.duration_secs, Some(5.0));
+        assert_eq!(info.width, Some(1920));
+        assert_eq!(info.height, Some(1080));
+    }
 
     /// A self-cleaning unique temp directory built with std only (no dev-deps).
     struct TmpDir(path::PathBuf);

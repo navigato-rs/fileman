@@ -1811,6 +1811,7 @@ fn load_sftp_directory_async(
                     browser.dir_token = browser.dir_token.wrapping_add(1);
                     browser.container_root = None;
                     browser.watching_archive = None;
+                    browser.progress_override = None;
                     browser.marked.clear();
                     sort_entries(&mut browser.entries, sort_mode, sort_desc);
                     if let Some(ref name) = prefer_name
@@ -1885,6 +1886,7 @@ fn load_sftp_directory_async(
     browser.prefer_select_name = prefer_name;
     browser.container_root = None;
     browser.watching_archive = None;
+    browser.progress_override = None;
 
     // Stream for snappy first-paint when entering a new directory; on a same-dir
     // reload buffer atomically so entries swap in one shot (apply_dir_batch
@@ -2023,6 +2025,7 @@ fn load_fs_directory_async(
                     browser.load.retag(browser.dir_token);
                     browser.watching_archive = None;
                     browser.index_last_seen = 0;
+                    browser.progress_override = None;
                     browser.marked.clear();
                     // Re-sort since batches accumulated without sorting.
                     sort_entries(&mut browser.entries, sort_mode, sort_desc);
@@ -2287,6 +2290,7 @@ fn load_fs_directory_async(
     browser.prefer_select_name = remembered;
     browser.watching_archive = None;
     browser.index_last_seen = 0;
+    browser.progress_override = None;
 }
 
 fn build_listing_from_index(

@@ -317,6 +317,7 @@ enum RowAction {
     Reveal,
     Properties,
     CopyPath,
+    Rename,
     Trash,
 }
 
@@ -791,9 +792,18 @@ pub fn draw_panel(
                                         // Right-click context menu (skipped for ".."). Items that
                                         // need a local path are hidden for remote / in-archive rows.
                                         if entry.name != ".." {
+                                            // Select the row under the cursor as the menu opens so
+                                            // it's clear what the actions apply to.
+                                            if response.secondary_clicked() {
+                                                clicked_index = Some(idx);
+                                            }
                                             let is_fs = matches!(
                                                 entry.location,
                                                 core::EntryLocation::Fs(_)
+                                            );
+                                            let can_rename = !matches!(
+                                                entry.location,
+                                                core::EntryLocation::Container { .. }
                                             );
                                             response.context_menu(|ui| {
                                                 if ui.button("Open").clicked() {
@@ -819,6 +829,10 @@ pub fn draw_panel(
                                                 if ui.button("Copy path").clicked() {
                                                     context_action =
                                                         Some((idx, RowAction::CopyPath));
+                                                    ui.close();
+                                                }
+                                                if can_rename && ui.button("Rename").clicked() {
+                                                    context_action = Some((idx, RowAction::Rename));
                                                     ui.close();
                                                 }
                                                 if is_fs {
@@ -1190,6 +1204,7 @@ pub fn draw_panel(
             RowAction::Reveal => crate::input::reveal_selected_in_file_manager(app),
             RowAction::Properties => crate::input::show_properties_of_selected(app),
             RowAction::CopyPath => crate::input::copy_selected_paths(app, ui.ctx()),
+            RowAction::Rename => app.prepare_rename_selected(),
             RowAction::Trash => crate::input::trash_selected(app),
         }
     }

@@ -1189,86 +1189,89 @@ fn stream_container_preview(
     progress: Option<&crate::core::TransferProgress>,
 ) -> Result<(), String> {
     let normalized = inner_path.trim_start_matches('/');
-    let file = File::open(archive_path).map_err(|e| e.to_string())?;
-    if let Some(p) = progress {
-        let total = file.metadata().map(|m| m.len()).unwrap_or(0);
-        p.reset(total);
-    }
-    match kind {
-        crate::core::ContainerKind::Zip => {
-            let reader = std::io::BufReader::new(file);
-            let mut zip = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
-            for i in 0..zip.len() {
-                if !is_preview_current(current_id, id) {
-                    return Ok(());
+    // Read through with_seek_reader so archives on a remote host (whose path is
+    // synthetic, not a real local file) open over SFTP instead of failing with
+    // ENOENT from a plain File::open.
+    crate::archive::with_seek_reader(archive_path, |reader| {
+        use std::io::SeekFrom;
+        if let Some(p) = progress {
+            let total = reader.seek(SeekFrom::End(0)).unwrap_or(0);
+            reader.seek(SeekFrom::Start(0))?;
+            p.reset(total);
+        }
+        let to_io = std::io::Error::other;
+        match kind {
+            crate::core::ContainerKind::Zip => {
+                let mut zip = zip::ZipArchive::new(reader).map_err(to_io)?;
+                for i in 0..zip.len() {
+                    if !is_preview_current(current_id, id) {
+                        return Ok(());
+                    }
+                    let entry = zip.by_index(i).map_err(to_io)?;
+                    if entry.name() == normalized {
+                        return send_streaming_preview(
+                            tx, current_id, id, entry, max_bytes, force_text, wake, progress,
+                        );
+                    }
                 }
-                let entry = zip.by_index(i).map_err(|e| e.to_string())?;
-                if entry.name() == normalized {
-                    return send_streaming_preview(
-                        tx, current_id, id, entry, max_bytes, force_text, wake, progress,
-                    )
-                    .map_err(|e| e.to_string());
+            }
+            crate::core::ContainerKind::Tar => {
+                let mut archive = tar::Archive::new(reader);
+                for entry in archive.entries()? {
+                    if !is_preview_current(current_id, id) {
+                        return Ok(());
+                    }
+                    let mut entry = entry?;
+                    let path = entry.path()?;
+                    let name = crate::core::normalize_archive_path(&path);
+                    if name == normalized {
+                        return send_streaming_preview(
+                            tx, current_id, id, &mut entry, max_bytes, force_text, wake, progress,
+                        );
+                    }
+                }
+            }
+            crate::core::ContainerKind::TarGz => {
+                let decoder = flate2::read::GzDecoder::new(reader);
+                let mut archive = tar::Archive::new(decoder);
+                for entry in archive.entries()? {
+                    if !is_preview_current(current_id, id) {
+                        return Ok(());
+                    }
+                    let mut entry = entry?;
+                    let path = entry.path()?;
+                    let name = crate::core::normalize_archive_path(&path);
+                    if name == normalized {
+                        return send_streaming_preview(
+                            tx, current_id, id, &mut entry, max_bytes, force_text, wake, progress,
+                        );
+                    }
+                }
+            }
+            crate::core::ContainerKind::TarBz2 => {
+                let decoder = bzip2::read::BzDecoder::new(reader);
+                let mut archive = tar::Archive::new(decoder);
+                for entry in archive.entries()? {
+                    if !is_preview_current(current_id, id) {
+                        return Ok(());
+                    }
+                    let mut entry = entry?;
+                    let path = entry.path()?;
+                    let name = crate::core::normalize_archive_path(&path);
+                    if name == normalized {
+                        return send_streaming_preview(
+                            tx, current_id, id, &mut entry, max_bytes, force_text, wake, progress,
+                        );
+                    }
                 }
             }
         }
-        crate::core::ContainerKind::Tar => {
-            let reader = std::io::BufReader::new(file);
-            let mut archive = tar::Archive::new(reader);
-            for entry in archive.entries().map_err(|e| e.to_string())? {
-                if !is_preview_current(current_id, id) {
-                    return Ok(());
-                }
-                let mut entry = entry.map_err(|e| e.to_string())?;
-                let path = entry.path().map_err(|e| e.to_string())?;
-                let name = crate::core::normalize_archive_path(&path);
-                if name == normalized {
-                    return send_streaming_preview(
-                        tx, current_id, id, &mut entry, max_bytes, force_text, wake, progress,
-                    )
-                    .map_err(|e| e.to_string());
-                }
-            }
-        }
-        crate::core::ContainerKind::TarGz => {
-            let reader = std::io::BufReader::new(file);
-            let decoder = flate2::read::GzDecoder::new(reader);
-            let mut archive = tar::Archive::new(decoder);
-            for entry in archive.entries().map_err(|e| e.to_string())? {
-                if !is_preview_current(current_id, id) {
-                    return Ok(());
-                }
-                let mut entry = entry.map_err(|e| e.to_string())?;
-                let path = entry.path().map_err(|e| e.to_string())?;
-                let name = crate::core::normalize_archive_path(&path);
-                if name == normalized {
-                    return send_streaming_preview(
-                        tx, current_id, id, &mut entry, max_bytes, force_text, wake, progress,
-                    )
-                    .map_err(|e| e.to_string());
-                }
-            }
-        }
-        crate::core::ContainerKind::TarBz2 => {
-            let reader = std::io::BufReader::new(file);
-            let decoder = bzip2::read::BzDecoder::new(reader);
-            let mut archive = tar::Archive::new(decoder);
-            for entry in archive.entries().map_err(|e| e.to_string())? {
-                if !is_preview_current(current_id, id) {
-                    return Ok(());
-                }
-                let mut entry = entry.map_err(|e| e.to_string())?;
-                let path = entry.path().map_err(|e| e.to_string())?;
-                let name = crate::core::normalize_archive_path(&path);
-                if name == normalized {
-                    return send_streaming_preview(
-                        tx, current_id, id, &mut entry, max_bytes, force_text, wake, progress,
-                    )
-                    .map_err(|e| e.to_string());
-                }
-            }
-        }
-    }
-    Err(format!("Entry not found in archive: {inner_path}"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Entry not found in archive: {inner_path}"),
+        ))
+    })
+    .map_err(|e| e.to_string())
 }
 
 pub fn start_search_worker(

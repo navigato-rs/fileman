@@ -816,16 +816,18 @@ pub fn copy_remote_to_local_progress(
     if let Some(p) = progress {
         p.reset(expected_size.unwrap_or(0));
     }
-    // Inner closure: any Err returned here causes the destination file to
-    // be removed before the error propagates. Keeps partial / zero-size
-    // artifacts from accumulating when a transfer fails or is cancelled.
+    // Download into a temp sibling and atomically rename into place on
+    // success. This keeps a pre-existing destination intact if the transfer
+    // fails or is cancelled — only the temp file is ever removed, never the
+    // user's original.
+    let tmp_dst = partial_download_path(local_dst);
     let inner = || -> Result<(), String> {
         let handle = conn
             .open(remote_path, OpenMode::Read)
             .map_err(|e| e.message)?;
         let copied = (|| -> Result<u64, String> {
-            let mut local_file = std::fs::File::create(local_dst)
-                .map_err(|e| format!("create local {}: {e}", local_dst.display()))?;
+            let mut local_file = std::fs::File::create(&tmp_dst)
+                .map_err(|e| format!("create local {}: {e}", tmp_dst.display()))?;
             let mut written: u64 = 0;
             loop {
                 if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
@@ -863,12 +865,25 @@ pub fn copy_remote_to_local_progress(
         Ok(())
     };
     match inner() {
-        Ok(()) => Ok(()),
+        Ok(()) => std::fs::rename(&tmp_dst, local_dst).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_dst);
+            format!("finalize {}: {e}", local_dst.display())
+        }),
         Err(e) => {
-            let _ = std::fs::remove_file(local_dst);
+            let _ = std::fs::remove_file(&tmp_dst);
             Err(e)
         }
     }
+}
+
+/// Sibling temp path used while downloading, renamed onto the destination only
+/// after a complete transfer so a cancel can never destroy an existing file.
+fn partial_download_path(dst: &Path) -> std::path::PathBuf {
+    let name = dst
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "download".to_string());
+    dst.with_file_name(format!(".{name}.fileman-partial"))
 }
 
 /// Copy a local file to a remote path.

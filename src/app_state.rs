@@ -518,6 +518,9 @@ pub struct AppState {
     /// Human verb for the in-flight batch ("Copying", "Moving", …), shown as
     /// the progress modal's title.
     pub io_verb: &'static str,
+    /// Fraction of the window width given to the left panel (0.5 = even).
+    /// Adjusted by dragging the divider; double-click restores 0.5.
+    pub panel_split: f32,
     /// Shared transfer progress for IO/preview/edit workers.
     pub transfer_progress: Arc<crate::core::TransferProgress>,
     pub dir_size_tx: mpsc::Sender<path::PathBuf>,

@@ -1,14 +1,28 @@
 # Changelog
 
-## v0.4.0 (4 Sep 2026)
+## v0.4.0 (5 Sep 2026)
 
 ### Features
 - Pure-Rust SSH stack, replacing libssh2 — no OpenSSL, no async runtime
 - ssh-agent authentication on Windows
-- Dropped SSH connections re-establish themselves on the next request
+- Dropped SSH connections re-establish themselves, keeping the current listing on screen
+- Right-click context menu: Open, Open with default app, Reveal in file manager, Properties, Copy path, Rename, Move to Trash
+- Reveal a file in the desktop file manager (Ctrl+Shift+O)
+- Draggable divider between the panels; double-click to recenter
+- Extend the selection with Shift+Up / Shift+Down
+- Metadata preview for video files (duration and resolution)
+- Copy files out of an archive onto a remote host
 - macOS builds are signed and notarized, so they open without a Gatekeeper warning
 
 ### Fixes
+- Refreshing a remote folder keeps its contents on screen instead of blanking, and navigating back after a reconnect shows fresh data
+- Preview files inside archives on remote hosts
+- The cursor stays put after deleting an item, including on remotes
+- Copying onto an existing local file warns before overwriting
+- The activity spinner reflects real work — no more phantom spinning after browsing an archive
+- The progress dialog names the operation (Copying, Moving, …)
+- Text viewer no longer wraps long lines by default; the help screen scrolls to fit
+- Remote errors are shown in plain words, not wire codes
 - Wheel scrolling settles instead of bouncing back to the selection
 - Dialogs are no longer dimmed by their own overlay
 - Remote directory copies past 64 MB no longer corrupt

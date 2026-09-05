@@ -1445,7 +1445,7 @@ impl AppState {
                 find_match_num: 0,
                 find_focus: false,
                 request_id,
-                wrap: true,
+                wrap: false,
                 bytes_per_row: 16,
                 bytes_per_row_auto: true,
                 loading_since: Some(Instant::now()),

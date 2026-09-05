@@ -984,7 +984,8 @@ pub fn start_preview_worker(
                     thread::spawn(move || match location {
                         EntryLocation::Fs(path) => {
                             if crate::core::is_video_path(&path) {
-                                let _ = result_tx.send((id, PreviewContent::Text(video_preview(&path))));
+                                let _ = result_tx
+                                    .send((id, PreviewContent::Text(video_preview(&path))));
                                 return;
                             }
                             let force_text = is_text_path(&path);

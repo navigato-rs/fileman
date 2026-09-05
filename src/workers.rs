@@ -151,6 +151,76 @@ pub fn start_io_worker(
                         io_result = IOResult::Error(msg);
                     }
                 }
+                IOTask::CopyContainerToRemote {
+                    kind,
+                    archive_path,
+                    inner_path,
+                    host,
+                    remote_dir,
+                    display_name,
+                    is_dir,
+                } => {
+                    // Extract into a temp dir, then upload to the remote host.
+                    let tmp_dir = std::env::temp_dir().join("fileman_to_remote");
+                    let extracted = tmp_dir.join(&display_name);
+                    let result = (|| -> Result<(), String> {
+                        std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+                        if is_dir {
+                            copy_container_dir(
+                                kind,
+                                &archive_path,
+                                &inner_path,
+                                &tmp_dir,
+                                &display_name,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        } else {
+                            copy_container_entry(
+                                kind,
+                                &archive_path,
+                                &inner_path,
+                                &tmp_dir,
+                                &display_name,
+                            )
+                            .map_err(|e| e.to_string())?;
+                        }
+                        let session = lock_or_recover(&sftp_sessions)
+                            .get(&host)
+                            .cloned()
+                            .ok_or_else(|| format!("no active SFTP session for host {host}"))?;
+                        let locked = lock_or_recover(&session);
+                        if is_dir {
+                            let total = crate::sftp::count_bytes_local(&extracted);
+                            transfer_progress.reset(total);
+                            crate::sftp::copy_local_dir_to_remote_via_tar(
+                                &extracted,
+                                &locked.sftp,
+                                &remote_dir,
+                                &cancel_flag,
+                                Some(&transfer_progress),
+                            )
+                        } else {
+                            let remote_path = format!("{remote_dir}/{display_name}");
+                            crate::sftp::copy_local_to_remote_progress(
+                                &locked.sftp,
+                                &extracted,
+                                &remote_path,
+                                Some(&cancel_flag),
+                                Some(&transfer_progress),
+                            )
+                        }
+                    })();
+                    // Remove the extracted temp copy regardless of outcome.
+                    let _ = if is_dir {
+                        std::fs::remove_dir_all(&extracted)
+                    } else {
+                        std::fs::remove_file(&extracted)
+                    };
+                    io_result = match result {
+                        Ok(()) => IOResult::CompletedRemote(host),
+                        Err(e) => IOResult::ErrorRemote(host, format!("Copy to remote: {e}")),
+                    };
+                }
                 IOTask::Move { src, dst_dir } => {
                     let target = dst_dir.join(
                         src.file_name()

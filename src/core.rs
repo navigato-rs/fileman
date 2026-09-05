@@ -315,6 +315,16 @@ pub enum IOTask {
         name: String,
         is_dir: bool,
     },
+    /// Extract an entry from an archive and upload it to a remote directory.
+    CopyContainerToRemote {
+        kind: crate::archive::ContainerKind,
+        archive_path: path::PathBuf,
+        inner_path: String,
+        host: String,
+        remote_dir: String,
+        display_name: String,
+        is_dir: bool,
+    },
     /// Re-run the inner task with OS-level privilege elevation.
     Elevated(Box<IOTask>),
 }
@@ -348,6 +358,9 @@ impl IOTask {
                 ref display_name, ..
             }
             | IOTask::CopyContainerAndOpen {
+                ref display_name, ..
+            }
+            | IOTask::CopyContainerToRemote {
                 ref display_name, ..
             } => display_name.clone(),
             IOTask::Pack {

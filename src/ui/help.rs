@@ -70,64 +70,77 @@ pub fn draw_help(
                     .show(ui, |ui| {
                         ui.colored_label(color32(colors.preview_header_fg), "Help (Tab to return)");
                     });
-                ui.add_space(8.0);
-                ui.colored_label(color32(colors.preview_text), format!("FileMan {version}"));
-                ui.colored_label(color32(colors.row_fg_inactive), "Author: Dzmitry Malyshau");
-
-                ui.colored_label(
-                    color32(colors.row_fg_inactive),
-                    format!("GPU: {}", async_status.gpu_info),
-                );
-
-                // Update status
-                ui.add_space(6.0);
-                install_requested = draw_update_status(ui, &colors, &async_status.update);
-
-                // Async workers status
-                ui.add_space(10.0);
-                ui.colored_label(color32(colors.preview_text), "Async Workers");
-                ui.add_space(6.0);
-                draw_async_status(ui, &colors, async_status);
-
-                // Recent errors
-                if !error_log.is_empty() {
-                    ui.add_space(10.0);
-                    ui.colored_label(color32(colors.preview_text), "Recent Errors");
-                    ui.add_space(6.0);
-                    let now = std::time::Instant::now();
-                    let recent: Vec<&ErrorLogEntry> = error_log.iter().rev().take(10).collect();
-                    for entry in recent {
-                        ui.horizontal(|ui| {
-                            ui.add_space(10.0);
-                            ui.colored_label(
-                                color32(colors.row_fg_inactive),
-                                egui::RichText::new(relative_time(now, entry.when)).monospace(),
-                            );
-                            ui.colored_label(
-                                color32(colors.row_fg_selected),
-                                egui::RichText::new(format!("[{}]", entry.source)).monospace(),
-                            );
-                            ui.colored_label(
-                                color32(colors.row_fg_inactive),
-                                entry.message.lines().next().unwrap_or(""),
-                            );
-                        });
-                    }
-                }
-
-                ui.add_space(10.0);
-                ui.colored_label(color32(colors.preview_text), "Shortcuts");
-                ui.add_space(6.0);
-                for (keys, desc) in shortcuts {
-                    ui.horizontal(|ui| {
-                        ui.add_space(10.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add_space(8.0);
                         ui.colored_label(
-                            color32(colors.row_fg_selected),
-                            egui::RichText::new(keys).monospace().strong(),
+                            color32(colors.preview_text),
+                            format!("FileMan {version}"),
                         );
-                        ui.colored_label(color32(colors.row_fg_inactive), desc);
+                        ui.colored_label(
+                            color32(colors.row_fg_inactive),
+                            "Author: Dzmitry Malyshau",
+                        );
+
+                        ui.colored_label(
+                            color32(colors.row_fg_inactive),
+                            format!("GPU: {}", async_status.gpu_info),
+                        );
+
+                        // Update status
+                        ui.add_space(6.0);
+                        install_requested = draw_update_status(ui, &colors, &async_status.update);
+
+                        // Async workers status
+                        ui.add_space(10.0);
+                        ui.colored_label(color32(colors.preview_text), "Async Workers");
+                        ui.add_space(6.0);
+                        draw_async_status(ui, &colors, async_status);
+
+                        // Recent errors
+                        if !error_log.is_empty() {
+                            ui.add_space(10.0);
+                            ui.colored_label(color32(colors.preview_text), "Recent Errors");
+                            ui.add_space(6.0);
+                            let now = std::time::Instant::now();
+                            let recent: Vec<&ErrorLogEntry> =
+                                error_log.iter().rev().take(10).collect();
+                            for entry in recent {
+                                ui.horizontal(|ui| {
+                                    ui.add_space(10.0);
+                                    ui.colored_label(
+                                        color32(colors.row_fg_inactive),
+                                        egui::RichText::new(relative_time(now, entry.when))
+                                            .monospace(),
+                                    );
+                                    ui.colored_label(
+                                        color32(colors.row_fg_selected),
+                                        egui::RichText::new(format!("[{}]", entry.source))
+                                            .monospace(),
+                                    );
+                                    ui.colored_label(
+                                        color32(colors.row_fg_inactive),
+                                        entry.message.lines().next().unwrap_or(""),
+                                    );
+                                });
+                            }
+                        }
+
+                        ui.add_space(10.0);
+                        ui.colored_label(color32(colors.preview_text), "Shortcuts");
+                        ui.add_space(6.0);
+                        for (keys, desc) in shortcuts {
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.colored_label(
+                                    color32(colors.row_fg_selected),
+                                    egui::RichText::new(keys).monospace().strong(),
+                                );
+                                ui.colored_label(color32(colors.row_fg_inactive), desc);
+                            });
+                        }
                     });
-                }
             });
     });
     install_requested

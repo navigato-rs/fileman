@@ -515,6 +515,9 @@ pub struct AppState {
     /// "file X of N". Reset to 0 when io_in_flight reaches 0.
     pub io_batch_total: usize,
     pub io_cancel_requested: bool,
+    /// Human verb for the in-flight batch ("Copying", "Moving", …), shown as
+    /// the progress modal's title.
+    pub io_verb: &'static str,
     /// Shared transfer progress for IO/preview/edit workers.
     pub transfer_progress: Arc<crate::core::TransferProgress>,
     pub dir_size_tx: mpsc::Sender<path::PathBuf>,
@@ -1849,6 +1852,13 @@ impl AppState {
     // This rule is misfiring when coupled with "pattern_type_mismatch"
     #[allow(clippy::needless_borrowed_reference)]
     pub fn enqueue_pending_op(&mut self, op: &PendingOp) {
+        self.io_verb = match *op {
+            PendingOp::Copy { .. } => "Copying",
+            PendingOp::Move { .. } => "Moving",
+            PendingOp::Delete { .. } => "Deleting",
+            PendingOp::Rename { .. } => "Renaming",
+            PendingOp::Pack { .. } => "Packing",
+        };
         match *op {
             PendingOp::Copy { ref items, ref dst } => {
                 for item in items {

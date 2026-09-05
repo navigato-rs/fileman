@@ -4054,6 +4054,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             io_in_flight: 0,
             io_batch_total: 0,
             io_verb: "Working",
+            panel_split: 0.5,
             io_cancel_requested: false,
             transfer_progress: transfer_progress.clone(),
             dir_size_tx,
@@ -4415,14 +4416,22 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                         let right_editing =
                             should_show_editor(&runtime.app, core::ActivePanel::Right);
                         let full_width = left_editing || right_editing;
-                        let panel_width = if full_width {
+                        let avail = (rect.width() - spacing_x).max(0.0);
+                        // Left panel width from the split ratio, clamped so neither
+                        // panel can be dragged unusably narrow.
+                        let left_width = if full_width {
                             rect.width()
                         } else {
-                            ((rect.width() - spacing_x) * 0.5).max(0.0)
+                            (avail * runtime.app.panel_split).clamp(avail * 0.15, avail * 0.85)
+                        };
+                        let right_width = if full_width {
+                            rect.width()
+                        } else {
+                            (avail - left_width).max(0.0)
                         };
                         let left_rect = egui::Rect::from_min_size(
                             rect.min,
-                            egui::Vec2::new(panel_width, rect.height()),
+                            egui::Vec2::new(left_width, rect.height()),
                         );
                         let right_rect = egui::Rect::from_min_size(
                             rect.min
@@ -4430,11 +4439,11 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                                     if full_width {
                                         0.0
                                     } else {
-                                        panel_width + spacing_x
+                                        left_width + spacing_x
                                     },
                                     0.0,
                                 ),
-                            egui::Vec2::new(panel_width, rect.height()),
+                            egui::Vec2::new(right_width, rect.height()),
                         );
 
                         if !right_editing {
@@ -4594,12 +4603,33 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                         if !full_width {
                             ui.painter().rect_filled(
                                 egui::Rect::from_min_size(
-                                    rect.min + egui::Vec2::new(panel_width, 0.0),
+                                    rect.min + egui::Vec2::new(left_width, 0.0),
                                     egui::Vec2::new(spacing_x, rect.height()),
                                 ),
                                 egui::CornerRadius::ZERO,
                                 color32(runtime.app.theme.colors().divider),
                             );
+                            // Draggable divider: widen the hit area beyond the thin
+                            // painted line. Double-click restores the even split.
+                            let hit = egui::Rect::from_min_size(
+                                egui::pos2(rect.min.x + left_width - 3.0, rect.min.y),
+                                egui::Vec2::new(spacing_x + 6.0, rect.height()),
+                            );
+                            let resp = ui.interact(
+                                hit,
+                                ui.id().with("panel_divider"),
+                                egui::Sense::click_and_drag(),
+                            );
+                            if resp.hovered() || resp.dragged() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                            }
+                            if resp.double_clicked() {
+                                runtime.app.panel_split = 0.5;
+                            } else if resp.dragged() && avail > 1.0 {
+                                runtime.app.panel_split = (runtime.app.panel_split
+                                    + resp.drag_delta().x / avail)
+                                    .clamp(0.15, 0.85);
+                            }
                         }
                     });
 

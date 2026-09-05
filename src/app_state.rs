@@ -1942,8 +1942,26 @@ impl AppState {
                                 }
                             }
                         }
-                        // Container → Remote: not supported yet
-                        (&EntryLocation::Container { .. }, &CopyDest::Remote { .. }) => continue,
+                        // Container → Remote: extract the entry, then upload it.
+                        (
+                            &EntryLocation::Container {
+                                ref kind,
+                                ref archive_path,
+                                ref inner_path,
+                            },
+                            &CopyDest::Remote {
+                                ref host,
+                                path: ref remote_dir,
+                            },
+                        ) => IOTask::CopyContainerToRemote {
+                            kind: *kind,
+                            archive_path: archive_path.clone(),
+                            inner_path: inner_path.clone(),
+                            host: host.clone(),
+                            remote_dir: remote_dir.clone(),
+                            display_name: item.src.display_name(),
+                            is_dir: item.kind == CopyKind::Directory,
+                        },
                     };
                     self.enqueue_io(task);
                 }

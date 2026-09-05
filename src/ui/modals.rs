@@ -130,7 +130,7 @@ pub fn draw_progress_modal(ctx: &egui::Context, app: &app_state::AppState) {
         egui::Color32::from_black_alpha(120),
     );
 
-    egui::Window::new("Working")
+    egui::Window::new(app.io_verb)
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
@@ -138,20 +138,24 @@ pub fn draw_progress_modal(ctx: &egui::Context, app: &app_state::AppState) {
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
             ui.add_space(6.0);
+            // Title already carries the verb ("Copying"…); the body shows only
+            // the progress detail so it doesn't read "Copying / Copying…".
             let header = if app.io_cancel_requested {
-                "Cancelling…".to_string()
+                Some("Cancelling…".to_string())
             } else if app.io_batch_total > 1 {
                 let completed = app.io_batch_total.saturating_sub(app.io_in_flight);
                 let current = completed + 1;
-                format!(
-                    "Working — file {} of {}",
+                Some(format!(
+                    "File {} of {}",
                     current.min(app.io_batch_total),
                     app.io_batch_total
-                )
+                ))
             } else {
-                "Working…".to_string()
+                None
             };
-            ui.colored_label(color32(colors.row_fg_active), header);
+            if let Some(header) = header {
+                ui.colored_label(color32(colors.row_fg_active), header);
+            }
 
             // Current file name. Mid-truncate so the leading dir context
             // and the filename suffix both stay visible.

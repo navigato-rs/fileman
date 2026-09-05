@@ -446,6 +446,7 @@ fn init_headless_app(root: Option<PathBuf>) -> anyhow::Result<app_state::AppStat
         io_cancel_flag,
         io_in_flight: 0,
         io_batch_total: 0,
+        io_verb: "Working",
         io_cancel_requested: false,
         transfer_progress: transfer_progress.clone(),
         dir_size_tx,

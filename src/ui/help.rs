@@ -1,4 +1,4 @@
-use fileman::app_state::{AsyncStatus, ErrorLogEntry, SearchStatus, UpdateStatus};
+use fileman::app_state::{AsyncStatus, ErrorLogEntry, UpdateStatus};
 use fileman::theme;
 
 use crate::color32;
@@ -91,12 +91,6 @@ pub fn draw_help(
                         // Update status
                         ui.add_space(6.0);
                         install_requested = draw_update_status(ui, &colors, &async_status.update);
-
-                        // Async workers status
-                        ui.add_space(10.0);
-                        ui.colored_label(color32(colors.preview_text), "Async Workers");
-                        ui.add_space(6.0);
-                        draw_async_status(ui, &colors, async_status);
 
                         // Recent errors
                         if !error_log.is_empty() {
@@ -223,72 +217,4 @@ fn draw_update_status(
         }
     }
     install_requested
-}
-
-fn draw_async_status(ui: &mut egui::Ui, colors: &theme::ThemeColors, status: &AsyncStatus) {
-    // IO worker
-    let io_label = if status.io_in_flight == 0 {
-        "idle".to_string()
-    } else if status.io_cancel_requested {
-        format!("{} tasks (cancelling)", status.io_in_flight)
-    } else {
-        format!("{} tasks in flight", status.io_in_flight)
-    };
-    draw_worker_row(ui, colors, "IO", &io_label, status.io_in_flight > 0);
-
-    // Dir size worker
-    let dir_label = if status.dir_size_pending == 0 {
-        "idle".to_string()
-    } else {
-        format!("{} pending", status.dir_size_pending)
-    };
-    draw_worker_row(
-        ui,
-        colors,
-        "Dir size",
-        &dir_label,
-        status.dir_size_pending > 0,
-    );
-
-    // Search worker
-    let (search_label, search_active) = match status.search {
-        SearchStatus::Idle => ("idle".to_string(), false),
-        SearchStatus::Running(progress) => (
-            format!(
-                "scanning ({} scanned, {} matched)",
-                progress.scanned, progress.matched
-            ),
-            true,
-        ),
-        SearchStatus::Done(progress) => (
-            format!(
-                "done ({} scanned, {} matched)",
-                progress.scanned, progress.matched
-            ),
-            false,
-        ),
-    };
-    draw_worker_row(ui, colors, "Search", &search_label, search_active);
-}
-
-fn draw_worker_row(
-    ui: &mut egui::Ui,
-    colors: &theme::ThemeColors,
-    name: &str,
-    status: &str,
-    active: bool,
-) {
-    ui.horizontal(|ui| {
-        ui.add_space(10.0);
-        ui.colored_label(
-            color32(colors.row_fg_selected),
-            egui::RichText::new(format!("{name}:")).monospace().strong(),
-        );
-        let color = if active {
-            colors.row_fg_active
-        } else {
-            colors.row_fg_inactive
-        };
-        ui.colored_label(color32(color), status);
-    });
 }

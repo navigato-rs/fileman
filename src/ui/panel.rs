@@ -332,10 +332,11 @@ pub fn draw_panel(
 ) -> usize {
     let available = ui.available_size();
     ui.set_min_size(available);
-    // While an overlay modal is up, the panel must not react to clicks (which
-    // would change selection or switch panels "behind" the dialog). Disabling
-    // the Ui makes every widget below non-interactive.
-    if app.any_modal_open() {
+    // While an overlay modal is up — or the Help screen is open in the other
+    // panel — the panel must not react to clicks (which would change selection
+    // or switch panels "behind" it). Disabling the Ui makes every widget below
+    // non-interactive.
+    if app.any_modal_open() || app.help_panel_side().is_some() {
         ui.disable();
     }
     let panel_height = available.y.max(0.0).max(min_height);

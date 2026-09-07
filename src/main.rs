@@ -3103,6 +3103,8 @@ fn apply_panel_snapshot(
 }
 
 fn cancel_search(app: &mut app_state::AppState) {
+    app.search_cancel
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     app.search_request_id = app.search_request_id.wrapping_add(1);
     app.search_status = app_state::SearchStatus::Idle;
 }
@@ -3114,6 +3116,9 @@ fn start_search(app: &mut app_state::AppState) {
     }
     let search_mode = app.search_mode;
     let search_case = app.search_case;
+    app.search_cancel
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    app.search_cancel = Default::default();
     let id = app.search_request_id.wrapping_add(1);
     app.search_request_id = id;
     app.search_target = Some((app.active_panel, app.get_active_panel().active_tab));
@@ -3156,6 +3161,7 @@ fn start_search(app: &mut app_state::AppState) {
     }
     let _ = app.search_tx.send(core::SearchRequest {
         id,
+        cancel: Arc::clone(&app.search_cancel),
         root,
         needle,
         case: search_case,
@@ -3493,6 +3499,9 @@ impl Runtime {
     }
 
     fn shutdown(&mut self) {
+        self.app
+            .search_cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         self.image_cache.textures.clear();
         self.image_cache.meta.clear();
         self.image_cache.failures.clear();
@@ -4100,6 +4109,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             search_results: Vec::new(),
             search_selected: 0,
             search_request_id: 0,
+            search_cancel: Default::default(),
             search_target: None,
             search_status: app_state::SearchStatus::Idle,
             search_ui: app_state::SearchUiState::Closed,

@@ -900,12 +900,10 @@ pub fn format_date(epoch_secs: u64) -> String {
 }
 
 pub fn format_mode(mode: u32) -> String {
-    let file_type = if mode & 0o40000 != 0 {
-        'd'
-    } else if mode & 0o120000 != 0 {
-        'l'
-    } else {
-        '-'
+    let file_type = match mode & 0o170000 {
+        0o040000 => 'd',
+        0o120000 => 'l',
+        _ => '-',
     };
     let mut out = String::with_capacity(10);
     out.push(file_type);

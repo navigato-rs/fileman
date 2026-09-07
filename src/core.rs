@@ -9,6 +9,9 @@ use std::{
     time::UNIX_EPOCH,
 };
 
+#[path = "file_identity.rs"]
+mod file_identity;
+
 /// Shared transfer progress, updated atomically by worker threads and read by
 /// the UI. One instance lives in AppState behind an Arc.
 pub struct TransferProgress {
@@ -530,6 +533,12 @@ pub fn copy_recursively(src: &Path, dst_dir: &Path) -> io::Result<()> {
     }
 
     let meta = fs::symlink_metadata(src)?;
+    if meta.is_file() && file_identity::same_file(src, &dest)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "source and destination are the same file",
+        ));
+    }
 
     if meta.file_type().is_symlink() {
         #[cfg(unix)]

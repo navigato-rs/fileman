@@ -750,6 +750,21 @@ impl AppState {
         }
     }
 
+    /// Native close must not discard an edit or abandon an active operation.
+    pub fn quit_blocker(&self) -> Option<&'static str> {
+        for panel in [&self.left_panel, &self.right_panel] {
+            if let PanelMode::Edit(ref edit) = panel.mode
+                && edit.dirty
+            {
+                return Some("Save or discard the edited file before closing FileMan.");
+            }
+        }
+        if self.io_in_flight > 0 {
+            return Some("Finish or cancel the file operation before closing FileMan.");
+        }
+        None
+    }
+
     pub fn props_dialog(&self) -> Option<&PropsDialog> {
         match self.modal {
             Some(Modal::Props(ref d)) => Some(d),

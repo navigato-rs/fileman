@@ -4339,6 +4339,10 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                                     |t| now.duration_since(*t) < MIN_REFINING_DISPLAY,
                                 ) =>
                             {
+                                let elapsed = runtime.image_cache.refining[&inner.key].elapsed();
+                                ctx.request_repaint_after(
+                                    MIN_REFINING_DISPLAY.saturating_sub(elapsed),
+                                );
                                 runtime.image_pending.push_back(decoded);
                                 continue;
                             }
@@ -4862,21 +4866,6 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             }
             if !runtime.highlight_results.is_empty() {
                 runtime.window.request_redraw();
-            }
-            if let Some(preview) = runtime.app.preview_panel_mut()
-                && let Some(core::PreviewContent::Image(path)) = preview.content.as_ref()
-            {
-                let key = image_cache_key(path);
-                // Keep repainting only while the decode is unresolved: still in
-                // flight (animate the spinner), or not yet dispatched. Once the
-                // key resolves to a texture OR a failure, stop — otherwise a
-                // decode failure (key in `failures`, never in `textures`) would
-                // force a redraw every frame forever, pinning the CPU/GPU.
-                let resolved = runtime.image_cache.textures.contains_key(&key)
-                    || runtime.image_cache.failures.contains_key(&key);
-                if runtime.image_cache.pending.contains(&key) || !resolved {
-                    runtime.needs_redraw = true;
-                }
             }
             if pump_async(&mut runtime.app) {
                 runtime.needs_redraw = true;

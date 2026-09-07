@@ -57,6 +57,8 @@ where
 
 #[path = "search_scan.rs"]
 mod search_scan;
+#[path = "staging.rs"]
+mod staging;
 
 const PREVIEW_CHUNK_BYTES: usize = 16 * 1024;
 
@@ -163,11 +165,10 @@ pub fn start_io_worker(
                     display_name,
                     is_dir,
                 } => {
-                    // Extract into a temp dir, then upload to the remote host.
-                    let tmp_dir = std::env::temp_dir().join("fileman_to_remote");
-                    let extracted = tmp_dir.join(&display_name);
                     let result = (|| -> Result<(), String> {
-                        std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+                        let staging = staging::TempDir::new().map_err(|e| e.to_string())?;
+                        let extracted = staging.child(&display_name).map_err(|e| e.to_string())?;
+                        let tmp_dir = staging.path().to_path_buf();
                         if is_dir {
                             copy_container_dir(
                                 kind,
@@ -213,12 +214,6 @@ pub fn start_io_worker(
                             )
                         }
                     })();
-                    // Remove the extracted temp copy regardless of outcome.
-                    let _ = if is_dir {
-                        std::fs::remove_dir_all(&extracted)
-                    } else {
-                        std::fs::remove_file(&extracted)
-                    };
                     io_result = match result {
                         Ok(()) => IOResult::CompletedRemote(host),
                         Err(e) => IOResult::ErrorRemote(host, format!("Copy to remote: {e}")),

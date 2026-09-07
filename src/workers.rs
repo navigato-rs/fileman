@@ -55,6 +55,9 @@ where
     f(&locked)
 }
 
+#[path = "search_scan.rs"]
+mod search_scan;
+
 const PREVIEW_CHUNK_BYTES: usize = 16 * 1024;
 
 pub fn start_io_worker(
@@ -1405,6 +1408,9 @@ pub fn start_search_worker(
                     Err(_) => break,
                 },
             };
+            if request.cancel.load(Ordering::Relaxed) {
+                continue;
+            }
             if let Some((ref host, ref remote_root)) = request.remote {
                 pending = run_remote_search(
                     &request,
@@ -1430,6 +1436,9 @@ pub fn start_search_worker(
             let mut tick = 0usize;
 
             loop {
+                if request.cancel.load(Ordering::Relaxed) {
+                    continue 'worker;
+                }
                 if let Ok(new_request) = rx.try_recv() {
                     pending = Some(new_request);
                     continue 'worker;
@@ -1452,6 +1461,9 @@ pub fn start_search_worker(
                     Err(_) => continue,
                 };
                 for entry in read_dir.flatten() {
+                    if request.cancel.load(Ordering::Relaxed) {
+                        continue 'worker;
+                    }
                     tick = tick.wrapping_add(1);
                     if tick.is_multiple_of(256) {
                         if let Ok(new_request) = rx.try_recv() {
@@ -1521,7 +1533,14 @@ pub fn start_search_worker(
                             if !file_type.is_file() {
                                 continue;
                             }
-                            if file_contains(&path, &needle, request.case).unwrap_or(false) {
+                            if search_scan::file_contains(
+                                &path,
+                                &needle,
+                                request.case,
+                                &request.cancel,
+                            )
+                            .unwrap_or(false)
+                            {
                                 let size = metadata.as_ref().map(|m| m.len());
                                 let _ = result_tx.send(SearchEvent::Match {
                                     id: request.id,
@@ -1542,57 +1561,6 @@ pub fn start_search_worker(
         }
     });
     (tx, result_rx)
-}
-
-fn file_contains(path: &PathBuf, needle: &str, case: SearchCase) -> std::io::Result<bool> {
-    if needle.is_empty() {
-        return Ok(false);
-    }
-    let mut file = File::open(path)?;
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut carry: Vec<u8> = Vec::new();
-    let needle_bytes = needle.as_bytes();
-    let needle_lower = if case == SearchCase::Insensitive {
-        Some(needle.to_ascii_lowercase().into_bytes())
-    } else {
-        None
-    };
-    loop {
-        let read = file.read(&mut buf)?;
-        if read == 0 {
-            break;
-        }
-        let mut window = Vec::with_capacity(carry.len() + read);
-        if !carry.is_empty() {
-            window.extend_from_slice(&carry);
-        }
-        window.extend_from_slice(&buf[..read]);
-
-        let found = if let Some(needle_lower) = needle_lower.as_ref() {
-            let mut lowered = window.clone();
-            for byte in &mut lowered {
-                *byte = byte.to_ascii_lowercase();
-            }
-            memchr::memmem::find(&lowered, needle_lower).is_some()
-        } else {
-            memchr::memmem::find(&window, needle_bytes).is_some()
-        };
-        if found {
-            return Ok(true);
-        }
-
-        let keep = needle_bytes.len().saturating_sub(1);
-        if keep > 0 {
-            if window.len() >= keep {
-                carry = window[window.len() - keep..].to_vec();
-            } else {
-                carry = window;
-            }
-        } else {
-            carry.clear();
-        }
-    }
-    Ok(false)
 }
 
 fn wildcard_match(text: &str, pattern: &str) -> bool {
@@ -1751,6 +1719,9 @@ fn run_remote_search(
     let reader = std::io::BufReader::new(&mut channel);
 
     for line_result in reader.lines() {
+        if request.cancel.load(Ordering::Relaxed) {
+            return None;
+        }
         tick = tick.wrapping_add(1);
         if tick.is_multiple_of(32) {
             if let Ok(new_req) = cancel_rx.try_recv() {

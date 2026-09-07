@@ -555,6 +555,7 @@ pub struct AppState {
     pub search_results: Vec<SearchResult>,
     pub search_selected: usize,
     pub search_request_id: u64,
+    pub search_cancel: Arc<std::sync::atomic::AtomicBool>,
     /// The (panel, tab) that started the current search. Search events are
     /// routed here rather than to whatever panel/tab happens to be active when
     /// they arrive, so switching panels or tabs mid-search doesn't inject

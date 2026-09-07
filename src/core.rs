@@ -450,6 +450,7 @@ pub enum SearchCase {
 
 pub struct SearchRequest {
     pub id: u64,
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
     pub root: path::PathBuf,
     pub needle: String,
     pub case: SearchCase,

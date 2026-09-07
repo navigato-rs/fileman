@@ -478,6 +478,7 @@ fn init_headless_app(root: Option<PathBuf>) -> anyhow::Result<app_state::AppStat
         search_results: Vec::new(),
         search_selected: 0,
         search_request_id: 0,
+        search_cancel: Default::default(),
         search_target: None,
         search_status: app_state::SearchStatus::Idle,
         search_ui: app_state::SearchUiState::Closed,

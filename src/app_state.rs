@@ -52,7 +52,11 @@ impl PanelState {
             browser_mode: current.browser_mode.clone(),
             current_path: current.current_path.clone(),
             selected_index: 0,
-            entries: Vec::new(),
+            entries: if matches!(current.browser_mode, BrowserMode::Search { .. }) {
+                current.entries.clone()
+            } else {
+                Vec::new()
+            },
             load: LoadState::Idle,
             progress_override: None,
             prefer_select_name: None,
@@ -400,6 +404,26 @@ pub struct PanelSnapshot {
     pub mode: BrowserMode,
     pub current_path: path::PathBuf,
     pub selected_name: Option<String>,
+    /// A search belongs to this history entry, not to the latest global query.
+    pub search_entries: Option<Arc<[DirEntry]>>,
+}
+
+impl PanelSnapshot {
+    pub fn capture(browser: &BrowserState) -> Self {
+        let search = matches!(browser.browser_mode, BrowserMode::Search { .. });
+        let selected_name = browser.entries.get(browser.selected_index).map(|entry| {
+            if search && let EntryLocation::Fs(ref path) = entry.location {
+                return format!("fs:{}", path.to_string_lossy());
+            }
+            entry.name.clone()
+        });
+        Self {
+            mode: browser.browser_mode.clone(),
+            current_path: browser.current_path.clone(),
+            selected_name,
+            search_entries: search.then(|| Arc::from(browser.entries.clone())),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1081,19 +1105,7 @@ impl AppState {
         let snapshot = {
             let panel = self.panel(which);
             let browser = panel.browser();
-            let selected = browser.entries.get(browser.selected_index).map(|e| {
-                if matches!(browser.browser_mode, BrowserMode::Search { .. })
-                    && let EntryLocation::Fs(path) = e.location.clone()
-                {
-                    return format!("fs:{}", path.to_string_lossy());
-                }
-                e.name.clone()
-            });
-            PanelSnapshot {
-                mode: browser.browser_mode.clone(),
-                current_path: browser.current_path.clone(),
-                selected_name: selected,
-            }
+            PanelSnapshot::capture(browser)
         };
         let panel = self.panel_mut(which);
         let browser = panel.browser_mut();
@@ -1110,19 +1122,7 @@ impl AppState {
         let current = {
             let panel = self.panel(which);
             let browser = panel.browser();
-            let selected = browser.entries.get(browser.selected_index).map(|e| {
-                if matches!(browser.browser_mode, BrowserMode::Search { .. })
-                    && let EntryLocation::Fs(path) = e.location.clone()
-                {
-                    return format!("fs:{}", path.to_string_lossy());
-                }
-                e.name.clone()
-            });
-            PanelSnapshot {
-                mode: browser.browser_mode.clone(),
-                current_path: browser.current_path.clone(),
-                selected_name: selected,
-            }
+            PanelSnapshot::capture(browser)
         };
         let panel = self.panel_mut(which);
         let browser = panel.browser_mut();
@@ -1137,19 +1137,7 @@ impl AppState {
         let current = {
             let panel = self.panel(which);
             let browser = panel.browser();
-            let selected = browser.entries.get(browser.selected_index).map(|e| {
-                if matches!(browser.browser_mode, BrowserMode::Search { .. })
-                    && let EntryLocation::Fs(path) = e.location.clone()
-                {
-                    return format!("fs:{}", path.to_string_lossy());
-                }
-                e.name.clone()
-            });
-            PanelSnapshot {
-                mode: browser.browser_mode.clone(),
-                current_path: browser.current_path.clone(),
-                selected_name: selected,
-            }
+            PanelSnapshot::capture(browser)
         };
         let panel = self.panel_mut(which);
         let browser = panel.browser_mut();

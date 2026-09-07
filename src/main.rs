@@ -4827,8 +4827,13 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
 
                 match other {
                     winit::event::WindowEvent::CloseRequested => {
-                        // SFTP sessions are dropped automatically
-                        event_loop.exit();
+                        if let Some(message) = runtime.app.quit_blocker() {
+                            runtime.app.record_error("quit", message);
+                            runtime.needs_redraw = true;
+                            runtime.window.request_redraw();
+                        } else {
+                            event_loop.exit();
+                        }
                     }
                     winit::event::WindowEvent::Resized(new_size) => {
                         runtime.size = new_size;

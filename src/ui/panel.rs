@@ -1,5 +1,8 @@
 use std::sync::mpsc;
 
+#[path = "disk_space.rs"]
+mod disk_space;
+
 use fileman::{app_state, archive, core, theme};
 
 use crate::input::open_selected;
@@ -82,10 +85,9 @@ fn draw_status_line(
             ui.colored_label(dim, "·");
         }
 
-        // FS panels: free space on the panel's drive. Cached per-frame —
-        // statvfs is cheap on Linux/macOS.
+        // Reuse the last sample while a worker refreshes it on demand.
         if let core::BrowserMode::Fs = browser.browser_mode
-            && let Some(free) = free_space_bytes(&browser.current_path)
+            && let Some(free) = disk_space::get(&browser.current_path, app.wake.clone())
         {
             ui.colored_label(
                 fg,
@@ -125,56 +127,6 @@ fn worker_dot(ui: &mut egui::Ui, active: bool, colors: &theme::ThemeColors) {
             egui::Stroke::new(1.0_f32, color32(fade_color(colors.footer_fg, 0.5))),
         );
     }
-}
-
-#[cfg(unix)]
-fn free_space_bytes(path: &std::path::Path) -> Option<u64> {
-    use std::os::unix::ffi::OsStrExt as _;
-    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-    let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-    let rc = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
-    if rc != 0 {
-        return None;
-    }
-    // statvfs widths vary by platform; multiply via u128 to avoid overflow.
-    let bavail = u128::from(stat.f_bavail);
-    let frsize = u128::from(stat.f_frsize);
-    Some((bavail * frsize).min(u128::from(u64::MAX)) as u64)
-}
-
-#[cfg(windows)]
-fn free_space_bytes(path: &std::path::Path) -> Option<u64> {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt as _;
-
-    unsafe extern "system" {
-        fn GetDiskFreeSpaceExW(
-            lpDirectoryName: *const u16,
-            lpFreeBytesAvailableToCaller: *mut u64,
-            lpTotalNumberOfBytes: *mut u64,
-            lpTotalNumberOfFreeBytes: *mut u64,
-        ) -> i32;
-    }
-
-    let wide: Vec<u16> = OsStr::new(path)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut free_available: u64 = 0;
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide.as_ptr(),
-            &mut free_available,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
-    };
-    if ok != 0 { Some(free_available) } else { None }
-}
-
-#[cfg(not(any(unix, windows)))]
-fn free_space_bytes(_path: &std::path::Path) -> Option<u64> {
-    None
 }
 
 fn is_executable_name(name: &str) -> bool {

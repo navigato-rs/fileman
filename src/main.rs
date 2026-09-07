@@ -3457,6 +3457,7 @@ struct Runtime {
     surface_info: blade_graphics::SurfaceInfo,
     command_encoder: blade_graphics::CommandEncoder,
     last_sync: Option<blade_graphics::SyncPoint>,
+    pending_view: Option<bg::TextureView>,
     egui_ctx: egui::Context,
     egui_state: egui_winit::State,
     painter: be::GuiPainter,
@@ -3478,6 +3479,19 @@ struct Runtime {
 }
 
 impl Runtime {
+    fn finish_frame(&mut self) -> Result<(), String> {
+        if let Some(ref sync) = self.last_sync {
+            self.context
+                .wait_for(sync, !0)
+                .map_err(|error| format!("GPU frame wait failed: {error:?}"))?;
+        }
+        if let Some(view) = self.pending_view.take() {
+            self.context.destroy_texture_view(view);
+        }
+        self.last_sync = None;
+        Ok(())
+    }
+
     fn shutdown(&mut self) {
         self.image_cache.textures.clear();
         self.image_cache.meta.clear();
@@ -3487,8 +3501,9 @@ impl Runtime {
         self.image_cache.refining.clear();
         self.highlight_cache.clear();
         self.highlight_pending.clear();
-        if let Some(sync) = self.last_sync.take() {
-            self.context.wait_for(&sync, !0).ok();
+        if let Err(error) = self.finish_frame() {
+            log::error!("{error}");
+            return;
         }
         self.context
             .destroy_command_encoder(&mut self.command_encoder);
@@ -4181,6 +4196,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             surface_info,
             command_encoder,
             last_sync: None,
+            pending_view: None,
             egui_ctx,
             egui_state,
             painter,
@@ -4214,6 +4230,9 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
 
         match event {
             winit::event::WindowEvent::RedrawRequested => {
+                if runtime.size.width == 0 || runtime.size.height == 0 {
+                    return;
+                }
                 let transfer_progress = runtime.app.transfer_progress.clone();
                 let mut highlight_updated = false;
                 let mut completed = 0usize;
@@ -4722,8 +4741,10 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     scale_factor: runtime.window.scale_factor() as f32,
                 };
 
-                if let Some(sync) = runtime.last_sync.take() {
-                    runtime.context.wait_for(&sync, !0).ok();
+                if let Err(error) = runtime.finish_frame() {
+                    fatal_error_dialog("FileMan: GPU error", &error);
+                    event_loop.exit();
+                    return;
                 }
                 runtime.command_encoder.start();
                 runtime.painter.update_textures(
@@ -4767,7 +4788,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                 let sync = runtime.context.submit(&mut runtime.command_encoder);
                 runtime.last_sync = Some(sync.clone());
                 runtime.painter.after_submit(&sync);
-                runtime.context.destroy_texture_view(view);
+                runtime.pending_view = Some(view);
                 if highlight_updated {
                     runtime.window.request_redraw();
                 }
@@ -4797,6 +4818,14 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     }
                     winit::event::WindowEvent::Resized(new_size) => {
                         runtime.size = new_size;
+                        if new_size.width == 0 || new_size.height == 0 {
+                            return;
+                        }
+                        if let Err(error) = runtime.finish_frame() {
+                            fatal_error_dialog("FileMan: GPU error", &error);
+                            event_loop.exit();
+                            return;
+                        }
                         runtime.surface_config.size = bg::Extent {
                             width: runtime.size.width.max(1),
                             height: runtime.size.height.max(1),

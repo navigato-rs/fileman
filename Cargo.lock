@@ -1352,6 +1352,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
+ "navigato-support",
  "png",
  "reqwest",
  "ron",
@@ -2362,6 +2363,15 @@ dependencies = [
  "spirv",
  "thiserror 2.0.18",
  "unicode-ident",
+]
+
+[[package]]
+name = "navigato-support"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

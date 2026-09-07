@@ -32,3 +32,11 @@ pub mod ssh;
 pub mod syntax;
 pub mod theme;
 pub mod workers;
+
+/// Deliberately excludes machine names, paths, SSH configuration and error text.
+pub const SUPPORT: navigato_support::Info = navigato_support::Info {
+    app: navigato_support::App::Fileman,
+    version: env!("CARGO_PKG_VERSION"),
+    revision: option_env!("GITHUB_SHA"),
+    private_email: option_env!("NAVIGATO_PRIVATE_REPORT_EMAIL"),
+};

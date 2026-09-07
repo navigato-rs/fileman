@@ -1,0 +1,33 @@
+name: Feedback
+description: Report a bug, confusing behavior, or an idea.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is public. Do not include credentials, private paths, SSH
+        destinations, terminal output, or screenshots containing sensitive data.
+        Use **Private report by email** in the app for sensitive reports.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What were you trying to do?
+      description: A short description is enough, including for feature ideas.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened, or what should change?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Optional. A minimal example helps more than a full log.
+  - type: textarea
+    id: environment
+    attributes:
+      label: App and environment
+      description: Review the prefilled app/build, operating system and architecture.
+      render: text

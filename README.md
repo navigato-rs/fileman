@@ -130,3 +130,5 @@ make uninstall
 
 ## Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md) for repository layout, testing, and code style.
+
+Feedback and private diagnostics: [privacy and reporting](PRIVACY.md).

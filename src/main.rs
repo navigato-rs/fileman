@@ -809,49 +809,6 @@ fn sort_mode_label(mode: core::SortMode) -> &'static str {
     }
 }
 
-fn rebuild_search_entries(browser: &mut app_state::BrowserState, results: &[core::SearchResult]) {
-    let app_state::BrowserState {
-        browser_mode: ref mode,
-        ..
-    } = *browser;
-    browser.entries = results
-        .iter()
-        .map(|result| {
-            let display_name = match mode {
-                core::BrowserMode::Search { root, .. } => result
-                    .path
-                    .strip_prefix(root)
-                    .ok()
-                    .and_then(|p| p.to_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| {
-                        result
-                            .path
-                            .file_name()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("<unknown>")
-                            .to_string()
-                    }),
-                _ => result
-                    .path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("<unknown>")
-                    .to_string(),
-            };
-            core::DirEntry {
-                name: display_name,
-                is_dir: result.is_dir,
-                is_symlink: false,
-                link_target: None,
-                location: core::EntryLocation::Fs(result.path.clone()),
-                size: result.size,
-                modified: result.modified,
-            }
-        })
-        .collect();
-}
-
 fn hexdump_job(
     bytes: &[u8],
     width: usize,
@@ -3009,6 +2966,10 @@ fn apply_panel_snapshot(
     which: core::ActivePanel,
     snapshot: fileman::app_state::PanelSnapshot,
 ) {
+    if app.search_target == Some((which, app.panel(which).active_tab)) {
+        cancel_search(app);
+        app.search_target = None;
+    }
     match snapshot.mode {
         core::BrowserMode::Fs => {
             load_fs_directory_async(app, snapshot.current_path, which, snapshot.selected_name);
@@ -3035,49 +2996,15 @@ fn apply_panel_snapshot(
             load_sftp_directory_async(app, host, path, which, snapshot.selected_name);
         }
         core::BrowserMode::Search { .. } => {
-            let results = app.search_results.clone();
             let panel = app.panel_mut(which);
             let browser = panel.browser_mut();
             browser.browser_mode = snapshot.mode;
             browser.current_path = snapshot.current_path;
-            browser.entries.clear();
-            browser.entries.extend(results.iter().map(|result| {
-                let app_state::BrowserState {
-                    browser_mode: ref mode,
-                    ..
-                } = *browser;
-                let display_name = match mode {
-                    core::BrowserMode::Search { root, .. } => result
-                        .path
-                        .strip_prefix(root)
-                        .ok()
-                        .and_then(|p| p.to_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| {
-                            result
-                                .path
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("<unknown>")
-                                .to_string()
-                        }),
-                    _ => result
-                        .path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("<unknown>")
-                        .to_string(),
-                };
-                core::DirEntry {
-                    name: display_name,
-                    is_dir: result.is_dir,
-                    is_symlink: false,
-                    link_target: None,
-                    location: core::EntryLocation::Fs(result.path.clone()),
-                    size: result.size,
-                    modified: result.modified,
-                }
-            }));
+            browser.entries = snapshot
+                .search_entries
+                .as_deref()
+                .unwrap_or_default()
+                .to_vec();
             sort_entries(&mut browser.entries, browser.sort_mode, browser.sort_desc);
             browser.load = app_state::LoadState::Idle;
             browser.selected_index = snapshot
@@ -3287,10 +3214,9 @@ fn reload_panel(app: &mut app_state::AppState, which: core::ActivePanel) {
             load_sftp_directory_async(app, host, path, which, selected_name);
         }
         core::BrowserMode::Search { .. } => {
-            let results = app.search_results.clone();
             let panel = app.panel_mut(which);
             let browser = panel.browser_mut();
-            rebuild_search_entries(browser, &results);
+            sort_entries(&mut browser.entries, browser.sort_mode, browser.sort_desc);
             if let Some(name) = selected_name
                 && let Some(idx) = browser.entries.iter().position(|entry| entry.name == name)
             {

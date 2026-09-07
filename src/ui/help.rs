@@ -92,6 +92,8 @@ pub fn draw_help(
                         ui.add_space(6.0);
                         install_requested = draw_update_status(ui, &colors, &async_status.update);
 
+                        navigato_support::show(ui, fileman::SUPPORT);
+
                         // Recent errors
                         if !error_log.is_empty() {
                             ui.add_space(10.0);

@@ -1868,7 +1868,9 @@ fn spawn_sftp_load_thread(
     wake: Option<Arc<dyn Fn() + Send + Sync>>,
     atomic: bool,
 ) {
+    navigato_support::feature(navigato_support::Feature::Remote);
     thread::spawn(move || {
+        let _directory = navigato_support::timer(navigato_support::Metric::DirectoryRemote);
         let locked = session.lock().unwrap_or_else(|p| p.into_inner());
         let mut buffered: Vec<core::DirEntry> = Vec::new();
         let mut first = true;
@@ -2060,6 +2062,7 @@ fn load_fs_directory_async(
             let _ = tx.send(core::DirBatch::Append(snapshot.clone()));
         }
         thread::spawn(move || {
+            let _directory = navigato_support::timer(navigato_support::Metric::DirectoryLocal);
             let chunk = 500usize;
             let mut all: Vec<core::DirEntry> = snapshot;
             for entry in rd.flatten() {
@@ -2134,6 +2137,7 @@ fn load_fs_directory_async(
         });
     } else {
         thread::spawn(move || {
+            let _directory = navigato_support::timer(navigato_support::Metric::DirectoryLocal);
             let chunk = 500usize;
             let mut all: Vec<core::DirEntry> = Vec::new();
             match fs::read_dir(&path_clone) {
@@ -2433,6 +2437,7 @@ fn load_container_directory_async(
     cache_mode: ContainerLoadMode,
     return_remote: Option<(String, String)>,
 ) {
+    navigato_support::feature(navigato_support::Feature::Archive);
     app.stash_container_cache(target_panel);
     let cache_key = (archive_path.clone(), cwd.clone(), kind);
     let mut cached = app.container_dir_cache.remove(&cache_key);
@@ -3037,6 +3042,7 @@ fn cancel_search(app: &mut app_state::AppState) {
 }
 
 fn start_search(app: &mut app_state::AppState) {
+    navigato_support::feature(navigato_support::Feature::Search);
     let needle = app.search_query.trim().to_string();
     if needle.is_empty() {
         return;
@@ -3515,6 +3521,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                         "Failed to initialize GPU context:\n{err:?}\n\n{}",
                         surface_error_help()
                     );
+                    navigato_support::failure(navigato_support::Failure::GpuInitialization);
                     fatal_error_dialog("FileMan: GPU initialization failed", &body);
                     event_loop.exit();
                     return;
@@ -3538,6 +3545,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     "Failed to create GPU surface:\n{err:?}\n\n{}",
                     surface_error_help()
                 );
+                navigato_support::failure(navigato_support::Failure::SurfaceCreation);
                 fatal_error_dialog("FileMan: GPU surface creation failed", &body);
                 event_loop.exit();
                 return;
@@ -4169,6 +4177,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                 if runtime.size.width == 0 || runtime.size.height == 0 {
                     return;
                 }
+                let _frame = navigato_support::timer(navigato_support::Metric::Frame);
                 let transfer_progress = runtime.app.transfer_progress.clone();
                 let mut highlight_updated = false;
                 let mut completed = 0usize;
@@ -4682,6 +4691,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                 };
 
                 if let Err(error) = runtime.finish_frame() {
+                    navigato_support::failure(navigato_support::Failure::FrameWait);
                     fatal_error_dialog("FileMan: GPU error", &error);
                     event_loop.exit();
                     return;
@@ -4767,6 +4777,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                             return;
                         }
                         if let Err(error) = runtime.finish_frame() {
+                            navigato_support::failure(navigato_support::Failure::FrameWait);
                             fatal_error_dialog("FileMan: GPU error", &error);
                             event_loop.exit();
                             return;
@@ -5249,6 +5260,12 @@ fn main() -> anyhow::Result<()> {
         return run_update();
     }
 
+    let _support = navigato_support::init(
+        fileman::SUPPORT,
+        (!cfg!(debug_assertions))
+            .then(|| navigato_support::state_directory(navigato_support::App::Fileman))
+            .flatten(),
+    );
     let event_loop = winit::event_loop::EventLoop::<UserEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
     let mut app = App::new(proxy, args.left, args.right);

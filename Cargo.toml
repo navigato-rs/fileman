@@ -27,6 +27,7 @@ identifier = "com.fileman.app"
 icon = ["etc/macos/icon.png", "etc/windows/icon.ico"]
 
 [dependencies]
+navigato-support = { path = "support" }
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
@@ -105,3 +106,8 @@ strip = true
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gles)'] }
+
+[workspace]
+members = ["support"]
+default-members = [".", "support"]
+resolver = "2"

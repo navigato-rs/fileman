@@ -1319,6 +1319,7 @@ impl AppState {
     }
 
     pub fn prepare_edit_selected(&mut self) {
+        navigato_support::feature(navigato_support::Feature::Editor);
         let (path, ext, remote) = {
             let panel = self.get_active_panel();
             let browser = panel.browser();

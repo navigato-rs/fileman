@@ -104,3 +104,24 @@ jobs:
           path: |
             target/test-artifacts
             etc/snapshots
+
+  feedback:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test triage gates
+        run: python3 -m unittest discover -s scripts -p 'test_triage_gate.py'
+      - name: Verify compiled triage policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download v0.88.2 --repo github/gh-aw --pattern linux-amd64 --dir "$RUNNER_TEMP"
+          echo "f9caa10ab948ac2228ff5dbd0e5109e9a2acf820a16ccff0c4f331edbe373057  $RUNNER_TEMP/linux-amd64" | sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/linux-amd64"
+          "$RUNNER_TEMP/linux-amd64" compile org-triage --no-check-update --action-mode action --action-tag 9271a1804551c0dc4fb0085a97979950aa2f8489
+          git diff --exit-code -- .github/workflows/org-triage.lock.yml .gitattributes

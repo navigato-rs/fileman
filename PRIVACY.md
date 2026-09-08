@@ -27,9 +27,28 @@ such as `src/main.rs`, never runtime file paths. Local report filenames contain 
 time and process number for collision avoidance; those names are not exported.
 
 Rust panic recording is best effort and includes caught/worker panics, not just
-process crashes. It does not collect native crashes, stack traces, minidumps or
-unclean-exit guesses. Fatal renderer/desktop failures use stable classifications.
+process crashes. It does not collect native crashes, minidumps or unclean-exit guesses. Fatal renderer/desktop failures use stable classifications.
 The ordinary local panic/error logger is unchanged; it is never attached.
+
+## Optional backtraces and Sentry
+
+**Include application backtraces locally** is independently off by default, including
+when upgrading older preferences. When enabled, failure reports add at most 48
+executable-relative code offsets, its debug/build ID, image size and preferred load
+address. They do not include actual ASLR load addresses, loaded-library names,
+resolved compiler paths, thread names, variables, memory or panic payloads. Missing
+executable metadata leaves a category-only report. Turning this option off clears
+saved failure reports. Reports remain bounded to 8 KiB and are never sent by the app.
+
+The report review has a separate, unchecked **Allow the maintainer to import this
+report into private Sentry diagnostics** choice. That applies only to the copied or
+emailed report. Private email alone does not grant this permission. The maintainer
+importer refuses delivery without it and refuses usage reports. It sends one
+validated event to the separately configured hosted Sentry project, with no retries,
+redirects, source attachments or raw logs. Sentry sees the importer's network IP,
+not an end-user IP recorded by the app. Project access and retention are controlled
+by the maintainer's Sentry account; that account's policies also apply to imported
+reports. The app's seven-day local expiry does not delete reports already imported.
 
 ## Optional statistics
 
@@ -76,12 +95,22 @@ compiling. An absent or invalid address disables the private-report link, never
 falls back to an author's public email. Changing the alias requires a rebuild.
 `GITHUB_SHA`, when supplied by CI, identifies the exact build.
 
+## Symbol uploads
+
+Official release workflows preserve line-level debug information for each build
+variant and upload it when `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and `SENTRY_PROJECT` are
+configured. Org/project values may be GitHub secrets or variables. Only release
+symbols and the corresponding executable are uploaded, never a checkout-wide scan
+or source bundle. The auth token is CI-only and is not embedded into the app.
+`SENTRY_DSN` is used only by the explicit synthetic smoke workflow or a maintainer
+import; it is not an application upload switch. See `SENTRY.md` for validation.
+
 ## Next delivery milestone
 
-Hosted diagnostics and product analytics are **not enabled**. The current Sentry
+Automatic application uploads and product analytics delivery are **not enabled**. The current Sentry
 transport/dependency proof does not satisfy Starcom's no-native-crypto policy.
 Do not remove that policy or substitute an experimental TLS implementation merely
 for telemetry. Before adding uploads: select and validate a compliant transport,
-provision the private backend, document retention/IP handling, add distinct upload
+confirm the private backend and its retention/IP settings, add distinct automatic-upload
 consent, enforce bounded delivery/retries, and verify symbolized packaged-release
 reports. Local collection consent does not authorize a future automatic uploader.

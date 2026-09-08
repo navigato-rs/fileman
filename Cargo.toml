@@ -111,3 +111,8 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gles)'] }
 members = ["support"]
 default-members = [".", "support"]
 resolver = "2"
+
+[profile.diagnostics]
+inherits = "release"
+debug = 1
+strip = false

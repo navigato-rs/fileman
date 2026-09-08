@@ -1,0 +1,78 @@
+name: Crash diagnostics
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CC: navigato-no-c-compiler
+      CXX: navigato-no-cxx-compiler
+      CARGO_PROFILE_DIAGNOSTICS_SPLIT_DEBUGINFO: ${{ matrix.os == 'ubuntu-latest' && 'off' || 'packed' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test support and import boundaries
+        shell: bash
+        run: |
+          cargo test --locked -p navigato-support
+          cargo clippy --locked -p navigato-support --all-targets -- -D warnings
+          python -m unittest discover -s scripts -p test_sentry_report.py
+      - name: Build optimized probe
+        run: cargo build --locked -p navigato-support --example crash_probe --profile diagnostics
+      - name: Separate symbols and strip executable
+        uses: ./.github/actions/sentry-symbols
+        with:
+          binary: target/diagnostics/examples/crash_probe${{ runner.os == 'Windows' && '.exe' || '' }}
+          output: ${{ runner.temp }}/probe-symbols
+      - name: Validate stripped probe
+        shell: bash
+        run: |
+          python scripts/validate_crash.py \
+            "target/diagnostics/examples/crash_probe${{ runner.os == 'Windows' && '.exe' || '' }}" \
+            "$RUNNER_TEMP/probe-symbols" "$RUNNER_TEMP/probe-report"
+      # Dispatch only after merge. PRs never receive these credentials or send events.
+      - name: Upload synthetic probe symbols
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG || vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT || vars.SENTRY_PROJECT }}
+          SYMBOL_OUTPUT: ${{ runner.temp }}/probe-symbols
+        run: |
+          test -n "$SENTRY_AUTH_TOKEN" && test -n "$SENTRY_ORG" && test -n "$SENTRY_PROJECT"
+          python .github/actions/sentry-symbols/symbols.py upload
+      - name: Send this synthetic report only
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN || vars.SENTRY_DSN }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, sys
+          sys.path.insert(0, "scripts")
+          import sentry_report
+          paths = list(pathlib.Path(os.environ["RUNNER_TEMP"], "probe-report").glob("failure-*.json"))
+          assert len(paths) == 1
+          report = json.loads(paths[0].read_text())
+          assert report["version"] == "0.0.0-sentry-probe"
+          report["sentry_consent"] = True  # This workflow owns the synthetic data.
+          event_id = sentry_report.send_report(report, "fileman", os.environ["SENTRY_DSN"])
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"Synthetic Sentry event accepted: `{event_id}`. Verify readable `synthetic_panic` frames in Sentry; acceptance alone is not symbolication.\n")
+          PY

@@ -89,11 +89,13 @@ impl Storage {
         match read_bounded(&self.root.join("preferences.json"), 512) {
             Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(Preferences {
                 diagnostics: false,
+                backtraces: false,
                 usage: false,
             }),
             Err(ref error) if error.kind() == io::ErrorKind::NotFound => Preferences::default(),
             Err(_) => Preferences {
                 diagnostics: false,
+                backtraces: false,
                 usage: false,
             },
         }
@@ -260,6 +262,7 @@ mod tests {
             Payload::Failure {
                 kind: Failure::Panic,
                 site: None,
+                trace: None,
             },
         )
     }
@@ -306,6 +309,7 @@ mod tests {
             .unwrap();
         let prefs = Preferences {
             diagnostics: false,
+            backtraces: false,
             usage: true,
         };
         store.preferences(prefs).unwrap();
@@ -319,6 +323,7 @@ mod tests {
         store
             .purge_disabled(Preferences {
                 diagnostics: false,
+                backtraces: false,
                 usage: false,
             })
             .unwrap();
@@ -352,12 +357,14 @@ mod tests {
             storage: Some(store),
             preferences: Preferences {
                 diagnostics: false,
+                backtraces: false,
                 usage: false,
             },
             reports: Vec::new(),
             usage: Usage::default(),
             notice: None,
             selected: 0,
+            sentry_review: None,
         };
         state.record(Failure::Panic, None);
         assert!(state.storage.as_ref().unwrap().files().unwrap().is_empty());

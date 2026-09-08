@@ -1,0 +1,39 @@
+name: Preserve release symbols
+description: Preserve matching debug files, strip distributables, then upload when configured.
+inputs:
+  binary:
+    description: Exact built executable, before packaging.
+    required: true
+  output:
+    description: Separate directory for this build variant's debug files.
+    required: true
+  bundle-executable:
+    description: Optional already-bundled macOS executable to replace before signing.
+    default: ''
+  auth-token:
+    description: CI-only Sentry token; never compiled into the application.
+    default: ''
+  org:
+    description: Sentry organization slug.
+    default: ''
+  project:
+    description: Sentry project slug.
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Preserve and check debug files
+      shell: bash
+      env:
+        SYMBOL_BINARY: ${{ inputs.binary }}
+        SYMBOL_OUTPUT: ${{ inputs.output }}
+        SYMBOL_BUNDLE: ${{ inputs.bundle-executable }}
+      run: python "$GITHUB_ACTION_PATH/symbols.py" prepare
+    - name: Upload debug files
+      shell: bash
+      env:
+        SYMBOL_OUTPUT: ${{ inputs.output }}
+        SENTRY_AUTH_TOKEN: ${{ inputs.auth-token }}
+        SENTRY_ORG: ${{ inputs.org }}
+        SENTRY_PROJECT: ${{ inputs.project }}
+      run: python "$GITHUB_ACTION_PATH/symbols.py" upload

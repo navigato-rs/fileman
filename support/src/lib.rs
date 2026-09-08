@@ -3,6 +3,7 @@
 //! Reports contain typed classifications, never formatted errors or panic payloads.
 //! Hosted delivery is intentionally absent until a TLS transport passes policy.
 
+mod stack;
 mod storage;
 mod ui;
 
@@ -181,6 +182,8 @@ impl Usage {
 #[serde(deny_unknown_fields)]
 struct Preferences {
     diagnostics: bool,
+    #[serde(default)]
+    backtraces: bool,
     usage: bool,
 }
 
@@ -188,6 +191,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             diagnostics: true,
+            backtraces: false,
             usage: false,
         }
     }
@@ -203,13 +207,22 @@ struct Report {
     os: String,
     arch: String,
     payload: Payload,
+    #[serde(default)]
+    sentry_consent: bool,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum Payload {
-    Failure { kind: Failure, site: Option<Site> },
-    Usage { counters: Usage },
+    Failure {
+        kind: Failure,
+        site: Option<Site>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        trace: Option<stack::Trace>,
+    },
+    Usage {
+        counters: Usage,
+    },
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -249,18 +262,19 @@ fn safe_source(file: &str) -> bool {
 impl Report {
     fn new(info: Info, payload: Payload) -> Self {
         Self {
-            schema: 1,
+            schema: 2,
             app: info.app,
             version: token(info.version).into(),
             revision: token(info.revision.unwrap_or("unknown")).into(),
             os: std::env::consts::OS.into(),
             arch: std::env::consts::ARCH.into(),
             payload,
+            sentry_consent: false,
         }
     }
 
     fn valid(&self, app: App) -> bool {
-        self.schema == 1
+        matches!(self.schema, 1 | 2)
             && self.app == app
             && token(&self.version) == self.version
             && token(&self.revision) == self.revision
@@ -271,9 +285,15 @@ impl Report {
             )
             && match self.payload {
                 Payload::Failure {
-                    site: Some(ref site),
+                    ref site,
+                    ref trace,
                     ..
-                } => safe_source(&site.file),
+                } => {
+                    site.as_ref().is_none_or(|site| safe_source(&site.file))
+                        && trace
+                            .as_ref()
+                            .is_none_or(|trace| self.schema == 2 && trace.valid())
+                }
                 _ => true,
             }
     }
@@ -292,6 +312,7 @@ struct State {
     reports: Vec<(path::PathBuf, Report)>,
     notice: Option<&'static str>,
     selected: usize,
+    sentry_review: Option<path::PathBuf>,
 }
 
 impl State {
@@ -300,6 +321,7 @@ impl State {
         if self.preferences.usage != preferences.usage {
             CONSENT.fetch_add(1, sync::atomic::Ordering::AcqRel);
         }
+        let remove_stacks = self.preferences.backtraces && !preferences.backtraces;
         self.preferences = preferences;
         DIAGNOSTICS.store(preferences.diagnostics, sync::atomic::Ordering::Release);
         USAGE.store(preferences.usage, sync::atomic::Ordering::Release);
@@ -307,15 +329,18 @@ impl State {
             self.usage = Usage::default();
         }
         if let Some(ref storage) = self.storage {
-            let result = storage
-                .preferences(preferences)
-                .and_then(|()| storage.purge_disabled(preferences));
+            let result = storage.preferences(preferences).and_then(|()| {
+                storage.purge_disabled(Preferences {
+                    diagnostics: preferences.diagnostics && !remove_stacks,
+                    ..preferences
+                })
+            });
             if result.is_err() {
                 self.notice =
                     Some("Could not persist privacy settings or remove every local report.");
             }
             self.reports.retain(|(_, report)| match report.payload {
-                Payload::Failure { .. } => preferences.diagnostics,
+                Payload::Failure { .. } => preferences.diagnostics && !remove_stacks,
                 Payload::Usage { .. } => preferences.usage,
             });
         }
@@ -325,7 +350,12 @@ impl State {
         if !self.preferences.diagnostics {
             return;
         }
-        let report = Report::new(self.info, Payload::Failure { kind, site });
+        let trace = self
+            .preferences
+            .backtraces
+            .then(stack::Trace::capture)
+            .flatten();
+        let report = Report::new(self.info, Payload::Failure { kind, site, trace });
         if let Some(ref storage) = self.storage {
             match storage.save(&report) {
                 Ok(path) => {
@@ -348,6 +378,7 @@ pub fn init(info: Info, directory: Option<path::PathBuf>) -> Session {
         .map(storage::Storage::load_preferences)
         .unwrap_or(Preferences {
             diagnostics: false,
+            backtraces: false,
             usage: false,
         });
     let reports = storage
@@ -362,6 +393,7 @@ pub fn init(info: Info, directory: Option<path::PathBuf>) -> Session {
         usage: Usage::default(),
         notice: None,
         selected: 0,
+        sentry_review: None,
     };
     if SUPPORT.set(sync::Mutex::new(state)).is_ok() {
         DIAGNOSTICS.store(preferences.diagnostics, sync::atomic::Ordering::Release);
@@ -542,6 +574,7 @@ mod tests {
             Payload::Failure {
                 kind: Failure::Panic,
                 site: None,
+                trace: None,
             },
         );
         assert!(!report.text().contains("CANARY"));
@@ -578,8 +611,36 @@ mod tests {
                 let mut state = mutex.lock().unwrap();
                 assert_eq!(state.reports.len(), 1);
                 assert!(!state.reports[0].1.text().contains("CANARY"));
+                assert!(matches!(
+                    state.reports[0].1.payload,
+                    Payload::Failure { trace: None, .. }
+                ));
+                state.save_preferences(Preferences {
+                    diagnostics: true,
+                    backtraces: true,
+                    usage: false,
+                });
+                state.record(Failure::Panic, None);
+                assert!(matches!(
+                    state.reports[0].1.payload,
+                    Payload::Failure { trace: Some(_), .. }
+                ));
+                assert!(!state.reports[0].1.text().contains("CANARY"));
+                state.save_preferences(Preferences {
+                    diagnostics: true,
+                    backtraces: false,
+                    usage: false,
+                });
+                assert!(state.reports.is_empty());
+                assert!(state.storage.as_ref().unwrap().reports().is_empty());
+                state.record(Failure::Panic, None);
+                assert!(matches!(
+                    state.reports[0].1.payload,
+                    Payload::Failure { trace: None, .. }
+                ));
                 state.save_preferences(Preferences {
                     diagnostics: false,
+                    backtraces: false,
                     usage: true,
                 });
             }
@@ -588,10 +649,12 @@ mod tests {
                 let mut state = mutex.lock().unwrap();
                 state.save_preferences(Preferences {
                     diagnostics: false,
+                    backtraces: false,
                     usage: false,
                 });
                 state.save_preferences(Preferences {
                     diagnostics: false,
+                    backtraces: false,
                     usage: true,
                 });
             }
@@ -605,6 +668,7 @@ mod tests {
                 assert_eq!(state.usage.histograms[0].iter().sum::<u64>(), 1);
                 state.save_preferences(Preferences {
                     diagnostics: false,
+                    backtraces: false,
                     usage: false,
                 });
             }

@@ -34,6 +34,10 @@ jobs:
             rustflags: ""
             suffix: ""
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_PROFILE_RELEASE_DEBUG: "1"
+      CARGO_PROFILE_RELEASE_STRIP: "false"
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ matrix.os == 'ubuntu-latest' && 'off' || 'packed' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -45,11 +49,31 @@ jobs:
           cargo install cargo-bundle --git https://github.com/burtonageo/cargo-bundle --rev 17cc8eb --locked
           cargo install cargo-deb cargo-generate-rpm
 
-      - name: Build + bundle with self-update (Linux)
+      - name: Build (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo bundle --release --features self-update
+        run: cargo build --release --locked --bin fileman --features self-update
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
+
+      - name: Preserve Linux symbols
+        if: matrix.os == 'ubuntu-latest'
+        uses: ./.github/actions/sentry-symbols
+        with:
+          binary: target/release/fileman
+          output: target/symbols/portable
+          auth-token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          org: ${{ secrets.SENTRY_ORG || vars.SENTRY_ORG }}
+          project: ${{ secrets.SENTRY_PROJECT || vars.SENTRY_PROJECT }}
+
+      - name: Bundle (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo bundle --release --bin fileman --features self-update
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
+      - name: Verify bundled executable (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: cmp target/release/fileman target/symbols/portable/fileman
 
       - name: Package tarball (Linux)
         if: matrix.os == 'ubuntu-latest'
@@ -66,6 +90,16 @@ jobs:
       - name: Rebuild without self-update for packages (Linux Vulkan)
         if: matrix.os == 'ubuntu-latest' && matrix.variant == 'vulkan'
         run: cargo build --release --bin fileman
+
+      - name: Preserve package symbols
+        if: matrix.os == 'ubuntu-latest' && matrix.variant == 'vulkan'
+        uses: ./.github/actions/sentry-symbols
+        with:
+          binary: target/release/fileman
+          output: target/symbols/packages
+          auth-token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          org: ${{ secrets.SENTRY_ORG || vars.SENTRY_ORG }}
+          project: ${{ secrets.SENTRY_PROJECT || vars.SENTRY_PROJECT }}
 
       - name: Package deb + rpm (Linux Vulkan)
         if: matrix.os == 'ubuntu-latest' && matrix.variant == 'vulkan'
@@ -86,6 +120,17 @@ jobs:
       # Signs with Developer ID, notarizes, and staples when the secrets below
       # are configured; falls back to an ad-hoc signature otherwise so the job
       # still produces artifacts on forks. See CONTRIBUTING.md for the setup.
+      - name: Preserve macOS symbols
+        if: matrix.os == 'macos-latest'
+        uses: ./.github/actions/sentry-symbols
+        with:
+          binary: target/aarch64-apple-darwin/release/fileman
+          output: target/symbols/macos
+          bundle-executable: target/aarch64-apple-darwin/release/bundle/osx/FileMan.app/Contents/MacOS/fileman
+          auth-token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          org: ${{ secrets.SENTRY_ORG || vars.SENTRY_ORG }}
+          project: ${{ secrets.SENTRY_PROJECT || vars.SENTRY_PROJECT }}
+
       - name: Package (macOS)
         if: matrix.os == 'macos-latest'
         run: scripts/macos_package.sh
@@ -102,6 +147,16 @@ jobs:
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: cargo build --release --bin fileman --features self-update
+
+      - name: Preserve Windows symbols
+        if: matrix.os == 'windows-latest'
+        uses: ./.github/actions/sentry-symbols
+        with:
+          binary: target/release/fileman.exe
+          output: target/symbols/windows
+          auth-token: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          org: ${{ secrets.SENTRY_ORG || vars.SENTRY_ORG }}
+          project: ${{ secrets.SENTRY_PROJECT || vars.SENTRY_PROJECT }}
 
       - name: Package zip (Windows)
         if: matrix.os == 'windows-latest'

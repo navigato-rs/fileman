@@ -11,6 +11,8 @@ cargo run --locked -p navigato-http --example probe -- https://api.github.com/
 # Check the application dependency graph as well:
 cargo check --locked --features tls-evaluation --example tls-probe
 python scripts/check-dependencies.py --package navigato-http
+cargo build --locked -p navigato-http --example probe
+python http/tests/openssl_peer.py target/debug/examples/probe
 ```
 
 The probe prints only HTTP status and byte count. Non-2xx status still proves an
@@ -29,10 +31,11 @@ key exchange. RSA and ECDSA server authentication are tested. No TLS 1.2, QUIC,
 0-RTT, client certificates or client private-key loading. Server private keys in
 loopback tests are fixture-only and unreachable through the client API.
 
-The small adapter addresses two gaps in the pinned provider: all-zero X25519
+The small adapter addresses gaps in the pinned provider: all-zero X25519
 secrets are rejected using Dalek's contributory check, and AES-GCM suites have
 Rustls's documented 2^24-record confidentiality bound. Key exchange uses fallible
-OS randomness instead of upstream's `UnwrapErr`. Rustls still owns certificate
+OS randomness instead of upstream's `UnwrapErr`. P-256 accepts only the
+uncompressed key-share encoding required by TLS 1.3. Rustls still owns certificate
 validation, record processing and key updates; no primitives or TLS state machine
 are forked. These guards need upstream review before release adoption.
 
@@ -65,8 +68,13 @@ non-CA intermediates, missing chains, wrong roots, low-order shares, altered
 records, binary POSTs, redirects, bounded headers/bodies and stalled handshakes.
 It inspects the effective target graph, not dormant Cargo.lock entries.
 
-Before production: upstream adapter review, fuzz/differential testing against an
-independent TLS implementation, actual ingestion-host interoperability, proxy
+An independent loopback peer uses Python's system OpenSSL for 11 RSA/ECDSA,
+X25519/P-256 and certificate-rejection cases. That peer is test infrastructure,
+not linked into either application. It uses only the committed fixture keys and
+an isolated trust store. It neither installs a CA nor contacts an external host.
+
+Before production: upstream adapter review, fuzz/differential testing against a
+wider range of TLS implementations, actual ingestion-host interoperability, proxy
 and cancellation behavior, oldest-supported CPUs and additional architectures,
 and a complete dependency/advisory review. No benchmark or battery claim yet.
 Read-only live probes against public GitHub/Sentry endpoints are manual, separate

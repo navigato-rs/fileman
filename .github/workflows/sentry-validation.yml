@@ -1,0 +1,44 @@
+name: Validate crash diagnostics
+on:
+  push:
+    branches: [work/sentry-validation]
+permissions:
+  contents: write
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Prepare pinned tree
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/review" 0febbed5c384c1635f17e872caec442c51c26d28
+          python3 .review/apply.py "$RUNNER_TEMP/review"
+      - name: Test without Sentry credentials or uploads
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/review"
+          cargo fmt --check
+          cargo test --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked -p navigato-support --all-targets -- -D warnings
+          python3 -m unittest discover -s scripts -p test_sentry_report.py
+          CC=navigato-no-c CXX=navigato-no-cxx cargo build --locked -p navigato-support --example crash_probe --profile diagnostics
+          SYMBOL_BINARY=target/diagnostics/examples/crash_probe SYMBOL_OUTPUT="$RUNNER_TEMP/probe-symbols" python3 .github/actions/sentry-symbols/symbols.py prepare
+          python3 scripts/validate_crash.py target/diagnostics/examples/crash_probe "$RUNNER_TEMP/probe-symbols" "$RUNNER_TEMP/probe-report"
+      - name: Store validated blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .review/store.py "$RUNNER_TEMP/review"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crash-publication
+          path: ${{ runner.temp }}/export/publication.json
+          retention-days: 2

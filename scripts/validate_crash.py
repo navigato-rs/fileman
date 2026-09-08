@@ -36,7 +36,10 @@ if platform.system() == "Linux":
     assert any("synthetic_panic" in function and re.search(r"crash_probe\.rs:[1-9][0-9]*", site)
                for function, site in zip(lines[::2], lines[1::2])), "panic frame has no source line"
 elif platform.system() == "Darwin":
-    dwarf = args.symbols / (args.binary.name + ".dSYM") / "Contents/Resources/DWARF" / args.binary.name
+    # Cargo may keep the hashed example filename inside the renamed dSYM.
+    dwarfs = list((args.symbols / (args.binary.name + ".dSYM") / "Contents/Resources/DWARF").iterdir())
+    assert len(dwarfs) == 1 and dwarfs[0].is_file(), "expected one probe DWARF file"
+    dwarf = dwarfs[0]
     resolved = subprocess.check_output(["atos", "-o", str(dwarf), *addresses], text=True)
     assert any("synthetic_panic" in line and re.search(r"crash_probe\.rs:[1-9][0-9]*", line)
                for line in resolved.splitlines()), "panic frame has no source line"

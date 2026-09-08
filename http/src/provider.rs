@@ -109,6 +109,10 @@ struct P256Exchange {
 }
 impl crypto::ActiveKeyExchange for P256Exchange {
     fn complete(self: Box<Self>, peer: &[u8]) -> Result<crypto::SharedSecret, rustls::Error> {
+        // TLS 1.3 requires uncompressed P-256 points (RFC 8446, section 4.2.8.2).
+        if peer.len() != 65 || peer[0] != 4 {
+            return Err(invalid_share());
+        }
         let public = p256::PublicKey::from_sec1_bytes(peer).map_err(|_| invalid_share())?;
         Ok(self
             .secret
@@ -156,6 +160,16 @@ mod tests {
         for peer in [&[][..], &[0; 65], &[4; 65], &[2; 32]] {
             assert!(P256.start().unwrap().complete(peer).is_err());
         }
+    }
+    #[test]
+    fn rejects_valid_compressed_p256_point() {
+        let exchange = P256.start().unwrap();
+        let public = exchange.pub_key();
+        let mut compressed = [0; 33];
+        compressed[0] = 2 | (public[64] & 1);
+        compressed[1..].copy_from_slice(&public[1..33]);
+        assert!(p256::PublicKey::from_sec1_bytes(&compressed).is_ok());
+        assert!(P256.start().unwrap().complete(&compressed).is_err());
     }
     #[test]
     fn exchanges_agree_and_aes_has_finite_limits() {

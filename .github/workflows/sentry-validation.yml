@@ -1,38 +1,44 @@
-name: Check crash capture dependencies
+name: Validate crash diagnostics
 on:
   push:
     branches: [work/sentry-validation]
 permissions:
-  contents: read
+  contents: write
 jobs:
-  capture:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
-      - name: Export pinned source and capture dependencies
-        shell: bash
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Prepare pinned tree
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/review" 0febbed5c384c1635f17e872caec442c51c26d28
+          python3 .review/apply.py "$RUNNER_TEMP/review"
+      - name: Test without Sentry credentials or uploads
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/export" "$RUNNER_TEMP/probe/src"
-          git worktree add --detach "$RUNNER_TEMP/fileman" 0febbed5c384c1635f17e872caec442c51c26d28
-          git -C "$RUNNER_TEMP/fileman" bundle create "$RUNNER_TEMP/export/fileman.bundle" HEAD
-          git clone -q https://github.com/navigato-rs/starcom.git "$RUNNER_TEMP/starcom"
-          git -C "$RUNNER_TEMP/starcom" checkout --detach ac7893f809b5b8730fc081ac1424bc05f3256d22
-          git -C "$RUNNER_TEMP/starcom" bundle create "$RUNNER_TEMP/export/starcom.bundle" HEAD
-          printf '[package]\nname="capture-probe"\nversion="0.1.0"\nedition="2024"\n[dependencies]\nsentry-backtrace="=0.49.2"\nsentry-debug-images="=0.49.2"\nserde_json="1"\n' > "$RUNNER_TEMP/probe/Cargo.toml"
-          printf 'fn main() { assert!(sentry_backtrace::current_stacktrace().is_some()); assert!(!sentry_debug_images::debug_images().is_empty()); }\n' > "$RUNNER_TEMP/probe/src/main.rs"
-          cd "$RUNNER_TEMP/probe"
-          CC=navigato-no-c-compiler CXX=navigato-no-cxx-compiler cargo run
-          cp Cargo.lock "$RUNNER_TEMP/export/capture.lock"
-          tar -czf "$RUNNER_TEMP/export/cargo-sources.tar.gz" -C "$CARGO_HOME" registry git
+          cd "$RUNNER_TEMP/review"
+          cargo fmt --check
+          cargo test --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked -p navigato-support --all-targets -- -D warnings
+          python3 -m unittest discover -s scripts -p test_sentry_report.py
+          CC=navigato-no-c CXX=navigato-no-cxx cargo build --locked -p navigato-support --example crash_probe --profile diagnostics
+          SYMBOL_BINARY=target/diagnostics/examples/crash_probe SYMBOL_OUTPUT="$RUNNER_TEMP/probe-symbols" python3 .github/actions/sentry-symbols/symbols.py prepare
+          python3 scripts/validate_crash.py target/diagnostics/examples/crash_probe "$RUNNER_TEMP/probe-symbols" "$RUNNER_TEMP/probe-report"
+      - name: Store validated blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .review/store.py "$RUNNER_TEMP/review"
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
-          name: sentry-capture-sources
-          path: ${{ runner.temp }}/export/*
+          name: crash-publication
+          path: ${{ runner.temp }}/export/publication.json
           retention-days: 2

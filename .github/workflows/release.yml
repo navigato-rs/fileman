@@ -51,7 +51,7 @@ jobs:
 
       - name: Build (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo build --release --locked --bin fileman --features self-update
+        run: cargo build --release --locked --bin fileman
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 
@@ -67,7 +67,7 @@ jobs:
 
       - name: Bundle (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: cargo bundle --release --bin fileman --features self-update
+        run: cargo bundle --release --bin fileman
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 
@@ -87,20 +87,6 @@ jobs:
           mkdir -p dist
           cp target/release/bundle/appimage/fileman_*_x86_64.AppImage dist/fileman-linux-x86_64${{ matrix.suffix }}.AppImage
 
-      - name: Rebuild without self-update for packages (Linux Vulkan)
-        if: matrix.os == 'ubuntu-latest' && matrix.variant == 'vulkan'
-        run: cargo build --release --bin fileman
-
-      - name: Preserve package symbols
-        if: matrix.os == 'ubuntu-latest' && matrix.variant == 'vulkan'
-        uses: ./.github/actions/sentry-symbols
-        with:
-          binary: target/release/fileman
-          output: target/symbols/packages
-          auth-token: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          org: ${{ secrets.SENTRY_ORG || vars.SENTRY_ORG }}
-          project: ${{ secrets.SENTRY_PROJECT || vars.SENTRY_PROJECT }}
-
       - name: Package deb + rpm (Linux Vulkan)
         if: matrix.os == 'ubuntu-latest' && matrix.variant == 'vulkan'
         run: |
@@ -115,7 +101,7 @@ jobs:
         run: |
           cargo install cargo-bundle --git https://github.com/burtonageo/cargo-bundle --rev 17cc8eb --locked
           rustup target add aarch64-apple-darwin
-          cargo bundle --release --target aarch64-apple-darwin --features self-update
+          cargo bundle --release --target aarch64-apple-darwin
 
       # Signs with Developer ID, notarizes, and staples when the secrets below
       # are configured; falls back to an ad-hoc signature otherwise so the job
@@ -146,7 +132,7 @@ jobs:
       - name: Build (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
-        run: cargo build --release --bin fileman --features self-update
+        run: cargo build --release --bin fileman
 
       - name: Preserve Windows symbols
         if: matrix.os == 'windows-latest'

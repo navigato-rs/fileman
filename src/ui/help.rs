@@ -1,4 +1,4 @@
-use fileman::app_state::{AsyncStatus, ErrorLogEntry, UpdateStatus};
+use fileman::app_state::{AsyncStatus, ErrorLogEntry};
 use fileman::theme;
 
 use crate::color32;
@@ -10,8 +10,7 @@ pub fn draw_help(
     min_height: f32,
     async_status: &AsyncStatus,
     error_log: &[ErrorLogEntry],
-) -> bool {
-    let mut install_requested = false;
+) {
     let colors = theme.colors();
     ui.push_id("help_panel", |ui| {
         let version = env!("CARGO_PKG_VERSION");
@@ -88,9 +87,11 @@ pub fn draw_help(
                             format!("GPU: {}", async_status.gpu_info),
                         );
 
-                        // Update status
                         ui.add_space(6.0);
-                        install_requested = draw_update_status(ui, &colors, &async_status.update);
+                        ui.hyperlink_to(
+                            "Releases",
+                            "https://github.com/navigato-rs/fileman/releases/latest",
+                        );
 
                         navigato_support::show(ui, fileman::SUPPORT);
 
@@ -139,7 +140,6 @@ pub fn draw_help(
                     });
             });
     });
-    install_requested
 }
 
 /// Compact relative-time format for the error log: "3s", "12m", "2h", "5d".
@@ -154,69 +154,4 @@ fn relative_time(now: std::time::Instant, when: std::time::Instant) -> String {
     } else {
         format!("{:>3}d", elapsed / 86400)
     }
-}
-
-fn draw_update_status(
-    ui: &mut egui::Ui,
-    colors: &theme::ThemeColors,
-    status: &UpdateStatus,
-) -> bool {
-    let mut install_requested = false;
-    match status {
-        UpdateStatus::Disabled => {}
-        UpdateStatus::Checking => {
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                ui.spinner();
-                ui.colored_label(color32(colors.row_fg_inactive), "Checking for updates...");
-            });
-        }
-        UpdateStatus::UpToDate => {
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                ui.colored_label(color32(colors.row_fg_inactive), "Up to date.");
-            });
-        }
-        UpdateStatus::Available(version) => {
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                ui.colored_label(
-                    color32(colors.row_fg_selected),
-                    egui::RichText::new(format!("Update available: v{version}")).strong(),
-                );
-                if ui.button("Install").clicked() {
-                    install_requested = true;
-                }
-            });
-        }
-        UpdateStatus::Installing(version) => {
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                ui.spinner();
-                ui.colored_label(
-                    color32(colors.row_fg_inactive),
-                    format!("Installing v{version}..."),
-                );
-            });
-        }
-        UpdateStatus::Installed(version) => {
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                ui.colored_label(
-                    color32(colors.row_fg_selected),
-                    egui::RichText::new(format!("v{version} installed — restart to use")).strong(),
-                );
-            });
-        }
-        UpdateStatus::Failed(err) => {
-            ui.horizontal(|ui| {
-                ui.add_space(10.0);
-                ui.colored_label(
-                    color32(colors.row_fg_inactive),
-                    format!("Update failed: {err}"),
-                );
-            });
-        }
-    }
-    install_requested
 }

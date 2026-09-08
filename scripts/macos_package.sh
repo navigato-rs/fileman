@@ -2,7 +2,7 @@
 # Sign, notarize, and package the macOS app bundle into dist/.
 #
 # Produces two artifacts from target/.../bundle/osx/FileMan.app:
-#   dist/fileman-macos-aarch64.zip  plain archive, also consumed by self-update
+#   dist/fileman-macos-aarch64.zip  portable archive
 #   dist/fileman-macos-aarch64.dmg  drag-to-Applications installer
 #
 # Signing is driven entirely by environment variables (see CONTRIBUTING.md):
@@ -147,7 +147,7 @@ else
   codesign --verify --strict --verbose=2 "${app}"
 fi
 
-# --- ZIP (self-update asset) ---
+# --- ZIP (portable archive) ---
 
 # Notarization works on an archive, but the ticket is stapled to the bundle, so
 # the zip has to be rebuilt afterwards to carry the stapled copy.

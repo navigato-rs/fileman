@@ -592,8 +592,6 @@ pub struct AppState {
     /// Host of the currently-running remote search, if any.
     pub search_remote_host: Option<String>,
     pub refresh_tick: u64,
-    pub update_status: UpdateStatus,
-    pub update_rx: Option<mpsc::Receiver<UpdateStatus>>,
     pub gpu_info: String,
     /// Persistent error log surfaced in the Help screen. New entries are
     /// pushed via `record_error`; capped at `ERROR_LOG_CAP` entries.
@@ -665,30 +663,11 @@ pub enum SearchStatus {
     Done(crate::core::SearchProgress),
 }
 
-#[derive(Clone)]
-pub enum UpdateStatus {
-    /// Feature not compiled in, or not checking
-    Disabled,
-    /// Background check in progress
-    Checking,
-    /// Already on latest version
-    UpToDate,
-    /// A newer version is available
-    Available(String),
-    /// Download + install in progress
-    Installing(String),
-    /// Successfully installed, restart needed
-    Installed(String),
-    /// Check or install failed
-    Failed(String),
-}
-
 pub struct AsyncStatus {
     pub io_in_flight: usize,
     pub io_cancel_requested: bool,
     pub dir_size_pending: usize,
     pub search: SearchStatus,
-    pub update: UpdateStatus,
     pub gpu_info: String,
 }
 
@@ -711,15 +690,6 @@ impl AppState {
         }
     }
 
-    pub fn poll_update_status(&mut self) {
-        if let Some(ref rx) = self.update_rx
-            && let Ok(status) = rx.try_recv()
-        {
-            self.update_status = status;
-            self.update_rx = None;
-        }
-    }
-
     pub fn async_status(&self) -> AsyncStatus {
         AsyncStatus {
             io_in_flight: self.io_in_flight,
@@ -728,7 +698,6 @@ impl AppState {
             // remote directories too, not only local ones.
             dir_size_pending: self.dir_size_pending.len() + self.remote_dir_size_pending.len(),
             search: self.search_status,
-            update: self.update_status.clone(),
             gpu_info: self.gpu_info.clone(),
         }
     }

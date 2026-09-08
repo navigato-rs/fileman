@@ -1,0 +1,36 @@
+name: Check crash capture dependencies
+on:
+  push:
+    branches: [work/sentry-validation]
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Export pinned source and capture dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/export" "$RUNNER_TEMP/probe/src"
+          git bundle create "$RUNNER_TEMP/export/fileman.bundle" main
+          git clone -q https://github.com/navigato-rs/starcom.git "$RUNNER_TEMP/starcom"
+          git -C "$RUNNER_TEMP/starcom" checkout --detach ac7893f809b5b8730fc081ac1424bc05f3256d22
+          git -C "$RUNNER_TEMP/starcom" bundle create "$RUNNER_TEMP/export/starcom.bundle" HEAD
+          printf '[package]\nname="capture-probe"\nversion="0.1.0"\nedition="2024"\n[dependencies]\nsentry-backtrace="=0.49.2"\nsentry-debug-images="=0.49.2"\nserde_json="1"\n' > "$RUNNER_TEMP/probe/Cargo.toml"
+          printf 'fn main() { assert!(sentry_backtrace::current_stacktrace().is_some()); assert!(!sentry_debug_images::debug_images().is_empty()); }\n' > "$RUNNER_TEMP/probe/src/main.rs"
+          cd "$RUNNER_TEMP/probe"
+          CC=navigato-no-c-compiler CXX=navigato-no-cxx-compiler cargo run
+          cp Cargo.lock "$RUNNER_TEMP/export/capture.lock"
+          tar -czf "$RUNNER_TEMP/export/cargo-sources.tar.gz" -C "$CARGO_HOME" registry git
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sentry-capture-sources
+          path: ${{ runner.temp }}/export/*
+          retention-days: 2

@@ -38,6 +38,11 @@ jobs:
           cargo clippy --locked -p navigato-http --all-targets -- -D warnings
           cargo fmt --all --check
           python scripts/check-dependencies.py --package navigato-http
+      - name: Independent loopback TLS peer
+        shell: bash
+        run: |
+          cargo build --locked -p navigato-http --example probe
+          python http/tests/openssl_peer.py "target/debug/examples/probe${{ runner.os == 'Windows' && '.exe' || '' }}"
       - name: Read-only public interoperability probes
         if: github.event_name == 'workflow_dispatch' && inputs.live
         shell: bash

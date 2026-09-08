@@ -1,3 +1,5 @@
 /target
 PLAN.md
 tests/data/basic/test_new_file.txt
+
+__pycache__/

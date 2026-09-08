@@ -64,8 +64,6 @@ sha1 = "0.10"
 hmac = "0.12"
 base64 = "0.22"
 dds = "0.2.0"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"], optional = true }
-semver = { version = "1", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -92,10 +90,6 @@ assets = [
     { source = "etc/fileman.desktop", dest = "/usr/share/applications/fileman.desktop", mode = "644" },
     { source = "etc/fileman.svg", dest = "/usr/share/icons/hicolor/scalable/apps/fileman.svg", mode = "644" },
 ]
-
-[features]
-default = []
-self-update = ["reqwest", "semver"]
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"

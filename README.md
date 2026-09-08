@@ -18,7 +18,7 @@ FileMan is a fast, responsive two-panel file manager built with Rust, egui, and 
 
 ## Install
 
-Grab a build for your platform from the [latest release](https://github.com/kvark/fileman/releases/latest):
+Grab a build for your platform from the [latest release](https://github.com/navigato-rs/fileman/releases/latest):
 
 | Platform | Download | Notes |
 |----------|----------|-------|
@@ -31,8 +31,8 @@ Grab a build for your platform from the [latest release](https://github.com/kvar
 The `-gles` Linux builds use the OpenGL ES backend — use them if the default
 Vulkan build reports `NoSupportedDeviceFound`.
 
-Released builds check for a newer version on startup and offer to install it
-from the help screen (F1). The command line works too: `fileman --update`.
+Install new versions through your package manager or the Releases link in Help
+(F1). Fileman does not check for updates or replace its executable.
 
 If macOS reports that the app is damaged or that Apple cannot check it for
 malicious software, that release was built without notarization credentials.

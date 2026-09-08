@@ -486,8 +486,6 @@ fn init_headless_app(root: Option<PathBuf>) -> anyhow::Result<app_state::AppStat
         search_rx,
         search_remote_host: None,
         refresh_tick: 0,
-        update_status: app_state::UpdateStatus::Disabled,
-        update_rx: None,
         gpu_info: String::from("Test"),
         error_log: Vec::new(),
         settings: fileman::settings::Settings::default(),

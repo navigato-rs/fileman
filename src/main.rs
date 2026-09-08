@@ -27,8 +27,6 @@ mod input;
 mod replay_runner;
 mod snapshot_render;
 mod ui;
-#[cfg(feature = "self-update")]
-mod update;
 
 use fileman::{app_state, core, theme, workers};
 mod replay;
@@ -1486,8 +1484,6 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
             }
         }
     }
-
-    app.poll_update_status();
 
     changed
 }
@@ -4051,8 +4047,6 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             search_rx,
             search_remote_host: None,
             refresh_tick: 0,
-            update_status: app_state::UpdateStatus::Disabled,
-            update_rx: None,
             gpu_info: {
                 let backend = if cfg!(gles) {
                     "GLES"
@@ -4086,27 +4080,6 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                 Some((host, rpath)) => navigate_sftp(&mut app, &host, &rpath, panel),
                 None => load_fs_directory_async(&mut app, local_path, panel, None),
             }
-        }
-
-        #[cfg(feature = "self-update")]
-        {
-            let (update_tx, update_rx) = mpsc::channel();
-            app.update_status = app_state::UpdateStatus::Checking;
-            app.update_rx = Some(update_rx);
-            let wake = app.wake.clone();
-            thread::spawn(move || {
-                let status = match update::check_for_update() {
-                    Ok(Some(release)) => {
-                        app_state::UpdateStatus::Available(release.version.to_string())
-                    }
-                    Ok(None) => app_state::UpdateStatus::UpToDate,
-                    Err(e) => app_state::UpdateStatus::Failed(e.to_string()),
-                };
-                let _ = update_tx.send(status);
-                if let Some(ref w) = wake {
-                    w();
-                }
-            });
         }
 
         let ui_cache = UiCache {
@@ -4467,16 +4440,14 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                                         runtime.app.active_panel == core::ActivePanel::Left;
                                     let theme = runtime.app.theme.clone();
                                     let async_status = runtime.app.async_status();
-                                    if ui::help::draw_help(
+                                    ui::help::draw_help(
                                         ui,
                                         &theme,
                                         is_focused,
                                         rect.height(),
                                         &async_status,
                                         &runtime.app.error_log,
-                                    ) {
-                                        start_install(&mut runtime.app);
-                                    }
+                                    );
                                 } else {
                                     runtime.ui_cache.left_rows = ui::panel::draw_panel(
                                         ui,
@@ -4545,16 +4516,14 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                                         runtime.app.active_panel == core::ActivePanel::Right;
                                     let theme = runtime.app.theme.clone();
                                     let async_status = runtime.app.async_status();
-                                    if ui::help::draw_help(
+                                    ui::help::draw_help(
                                         ui,
                                         &theme,
                                         is_focused,
                                         rect.height(),
                                         &async_status,
                                         &runtime.app.error_log,
-                                    ) {
-                                        start_install(&mut runtime.app);
-                                    }
+                                    );
                                 } else {
                                     runtime.ui_cache.right_rows = ui::panel::draw_panel(
                                         ui,
@@ -4852,8 +4821,6 @@ struct CliArgs {
     left: Option<String>,
     /// Second positional arg (right panel path, local or "host:path")
     right: Option<String>,
-    #[cfg(feature = "self-update")]
-    update: bool,
 }
 
 /// Detect `host:path` format where the host part contains no slashes.
@@ -4887,9 +4854,6 @@ fn parse_cli_args() -> anyhow::Result<CliArgs> {
                 eprintln!("  -h, --help         Show this help message");
                 eprintln!("  --snapshot <PATH>   Render a snapshot to PNG");
                 eprintln!("  --replay <PATH>     Replay an input recording");
-                if cfg!(feature = "self-update") {
-                    eprintln!("  --update            Check for updates and install");
-                }
                 std::process::exit(0);
             }
             "--snapshot" => {
@@ -4905,10 +4869,6 @@ fn parse_cli_args() -> anyhow::Result<CliArgs> {
                         .map(PathBuf::from)
                         .ok_or_else(|| anyhow::anyhow!("--replay requires a path"))?,
                 );
-            }
-            #[cfg(feature = "self-update")]
-            "--update" => {
-                parsed.update = true;
             }
             other if !other.starts_with('-') => {
                 let slot = if parsed.left.is_none() {
@@ -5192,56 +5152,6 @@ fn draw_root_ui(render: UiRender<'_>) {
     }
 }
 
-#[cfg(feature = "self-update")]
-fn start_install(app: &mut app_state::AppState) {
-    let version = match &app.update_status {
-        app_state::UpdateStatus::Available(v) => v.clone(),
-        _ => return,
-    };
-    app.update_status = app_state::UpdateStatus::Installing(version.clone());
-    let (tx, rx) = mpsc::channel();
-    app.update_rx = Some(rx);
-    let wake = app.wake.clone();
-    thread::spawn(move || {
-        let status = match update::check_for_update() {
-            Ok(Some(release)) => match update::perform_update(&release) {
-                Ok(()) => app_state::UpdateStatus::Installed(version),
-                Err(e) => app_state::UpdateStatus::Failed(e.to_string()),
-            },
-            Ok(None) => app_state::UpdateStatus::UpToDate,
-            Err(e) => app_state::UpdateStatus::Failed(e.to_string()),
-        };
-        let _ = tx.send(status);
-        if let Some(ref w) = wake {
-            w();
-        }
-    });
-}
-
-#[cfg(not(feature = "self-update"))]
-fn start_install(_app: &mut app_state::AppState) {}
-
-#[cfg(feature = "self-update")]
-fn run_update() -> anyhow::Result<()> {
-    eprintln!(
-        "fileman v{} — checking for updates...",
-        env!("CARGO_PKG_VERSION")
-    );
-    match update::check_for_update()? {
-        Some(release) => {
-            eprintln!(
-                "New version available: {} ({})",
-                release.version, release.tag
-            );
-            update::perform_update(&release)?;
-        }
-        None => {
-            eprintln!("Already up to date.");
-        }
-    }
-    Ok(())
-}
-
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_default_env()
         .filter_module("egui", log::LevelFilter::Warn)
@@ -5254,10 +5164,6 @@ fn main() -> anyhow::Result<()> {
     }
     if let Some(snapshot_path) = args.snapshot {
         return replay_runner::run_snapshot(&snapshot_path);
-    }
-    #[cfg(feature = "self-update")]
-    if args.update {
-        return run_update();
     }
 
     let _support = navigato_support::init(

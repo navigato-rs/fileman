@@ -17,12 +17,10 @@ jobs:
         run: cargo build
       - name: Test
         run: cargo test
+      - name: Native crypto dependency policy
+        run: python scripts/check-dependencies.py
       - name: Clippy
         run: cargo clippy -- -D warnings
-      # Compile the release-only self-update feature here so breakage surfaces
-      # on every push rather than for the first time at tag/release time.
-      - name: Clippy (self-update feature)
-        run: cargo clippy --features self-update -- -D warnings
 
   build-gles:
     runs-on: ubuntu-latest
@@ -57,6 +55,8 @@ jobs:
         run: cargo check
       - name: Test
         run: cargo test
+      - name: Native crypto dependency policy
+        run: python scripts/check-dependencies.py
       - name: Clippy
         run: cargo clippy -- -D warnings
 
@@ -114,7 +114,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Test triage gates
-        run: python3 -m unittest discover -s scripts -p 'test_triage_gate.py'
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_triage_gate.py'
+          python3 -m unittest discover -s scripts -p 'test_dependency_policy.py'
       - name: Verify compiled triage policy
         env:
           GH_TOKEN: ${{ github.token }}

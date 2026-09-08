@@ -8,7 +8,7 @@ fn synthetic_panic() {
 
 fn main() -> std::io::Result<()> {
     let root = path::PathBuf::from(std::env::args_os().nth(1).expect("new report directory"));
-    let mut builder = fs::DirBuilder::new();
+    let builder = &mut fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt as _;

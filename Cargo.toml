@@ -28,6 +28,7 @@ icon = ["etc/macos/icon.png", "etc/windows/icon.ico"]
 
 [dependencies]
 navigato-support = { path = "support" }
+navigato-http = { path = "http", optional = true }
 anyhow = "1.0"
 log = "0.4"
 env_logger = "0.11"
@@ -102,9 +103,17 @@ strip = true
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(gles)'] }
 
 [workspace]
-members = ["support"]
+members = ["support", "http"]
 default-members = [".", "support"]
 resolver = "2"
+
+[features]
+tls-evaluation = ["dep:navigato-http"]
+
+[[example]]
+name = "tls-probe"
+path = "http/examples/probe.rs"
+required-features = ["tls-evaluation"]
 
 [profile.diagnostics]
 inherits = "release"

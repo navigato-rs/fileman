@@ -19,7 +19,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/export" "$RUNNER_TEMP/probe/src"
-          git bundle create "$RUNNER_TEMP/export/fileman.bundle" main
+          git worktree add --detach "$RUNNER_TEMP/fileman" 0febbed5c384c1635f17e872caec442c51c26d28
+          git -C "$RUNNER_TEMP/fileman" bundle create "$RUNNER_TEMP/export/fileman.bundle" HEAD
           git clone -q https://github.com/navigato-rs/starcom.git "$RUNNER_TEMP/starcom"
           git -C "$RUNNER_TEMP/starcom" checkout --detach ac7893f809b5b8730fc081ac1424bc05f3256d22
           git -C "$RUNNER_TEMP/starcom" bundle create "$RUNNER_TEMP/export/starcom.bundle" HEAD
@@ -30,6 +31,7 @@ jobs:
           cp Cargo.lock "$RUNNER_TEMP/export/capture.lock"
           tar -czf "$RUNNER_TEMP/export/cargo-sources.tar.gz" -C "$CARGO_HOME" registry git
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: sentry-capture-sources
           path: ${{ runner.temp }}/export/*

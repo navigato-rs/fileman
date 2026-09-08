@@ -1,0 +1,46 @@
+name: Pure Rust TLS
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      live:
+        description: Read-only public GitHub and Sentry HTTPS probes
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  evaluate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CC: navigato-no-c-compiler
+      CXX: navigato-no-cxx-compiler
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Test the Rust-only client
+        shell: bash
+        run: |
+          cargo test --locked -p navigato-http
+          cargo clippy --locked -p navigato-http --all-targets -- -D warnings
+          cargo fmt --all --check
+          python scripts/check-dependencies.py --package navigato-http
+      - name: Read-only public interoperability probes
+        if: github.event_name == 'workflow_dispatch' && inputs.live
+        shell: bash
+        run: |
+          cargo run --locked -p navigato-http --example probe -- https://api.github.com/
+          cargo run --locked -p navigato-http --example probe -- https://sentry.io/api/0/

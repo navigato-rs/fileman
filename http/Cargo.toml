@@ -1,0 +1,18 @@
+[package]
+name = "navigato-http"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+publish = false
+description = "Experimental Rust-only HTTPS client for Navigato"
+
+[dependencies]
+rustls = { version = "=0.23.44", default-features = false, features = ["std"] }
+rustls-rustcrypto = { git = "https://github.com/RustCrypto/rustls-rustcrypto", rev = "70f76c039e587192688af18a80d5d6435dedaf22", default-features = false, features = ["std", "zeroize"] }
+ureq = { version = "=3.3.0", default-features = false, features = ["rustls-no-provider"] }
+rustls-native-certs = "0.8"
+getrandom = { version = "0.4", default-features = false, features = ["sys_rng"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdh"] }
+x25519-dalek = { version = "3", default-features = false, features = ["static_secrets", "zeroize"] }
+zeroize = "1"

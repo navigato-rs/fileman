@@ -14,13 +14,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build
+        run: cargo build --locked --all-features
       - name: Test
-        run: cargo test
+        run: cargo test --locked --all-features
       - name: Native crypto dependency policy
         run: python scripts/check-dependencies.py
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-features -- -D warnings
 
   build-gles:
     runs-on: ubuntu-latest
@@ -29,15 +29,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build (GLES)
-        run: cargo build
+        run: cargo build --locked --all-features
         env:
           RUSTFLAGS: "--cfg gles"
       - name: Test (GLES)
-        run: cargo test
+        run: cargo test --locked --all-features
         env:
           RUSTFLAGS: "--cfg gles"
       - name: Clippy (GLES)
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-features -- -D warnings
         env:
           RUSTFLAGS: "--cfg gles"
 
@@ -52,13 +52,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Check
-        run: cargo check
+        run: cargo check --locked --all-features
       - name: Test
-        run: cargo test
+        run: cargo test --locked --all-features
       - name: Native crypto dependency policy
         run: python scripts/check-dependencies.py
       - name: Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked --all-features -- -D warnings
 
   sftp:
     runs-on: ubuntu-latest

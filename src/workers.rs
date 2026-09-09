@@ -1610,8 +1610,11 @@ fn build_remote_search_cmd(root: &str, needle: &str, case: SearchCase, mode: Sea
                 "-name"
             };
             let pattern_q = sh_quote(&pattern);
-            // GNU / busybox find: -printf with %y (type char) and %p (path)
-            format!("find {quoted_root} {flag} {pattern_q} -printf '%y\\t%p\\n' 2>/dev/null")
+            // GNU -printf gives type+path; POSIX find has no -printf, so fall back.
+            format!(
+                "find {quoted_root} {flag} {pattern_q} -printf '%y\\t%p\\n' 2>/dev/null \
+                 || find {quoted_root} {flag} {pattern_q} 2>/dev/null"
+            )
         }
         SearchMode::Content => {
             let case_flag = if case == SearchCase::Insensitive {
@@ -1687,11 +1690,14 @@ fn run_remote_search(
     };
 
     let cmd = build_remote_search_cmd(remote_root, &request.needle, request.case, request.mode);
-    let locked = lock_or_recover(&session_arc);
+    let conn = lock_or_recover(&session_arc).sftp.clone();
 
-    // Streamed rather than captured: a search over a big tree can print for a
-    // long time, and results should appear as they arrive.
-    let mut channel = match locked.sftp.exec_stream(&cmd, crate::ssh::Stdin::Closed) {
+    // Streamed rather than captured so matches appear as they arrive. Conn
+    // serialises socket IO; do not hold SftpSession across the stream.
+    let mut channel = match conn
+        .exec_stream(&cmd, crate::ssh::Stdin::Closed)
+        .map(|ch| ch.with_cancel(Arc::clone(&request.cancel)))
+    {
         Ok(ch) => ch,
         Err(e) => {
             let _ = result_tx.send(SearchEvent::Error {
@@ -1734,7 +1740,12 @@ fn run_remote_search(
 
         let line = match line_result {
             Ok(l) => l,
-            Err(_) => break,
+            Err(_) => {
+                if request.cancel.load(Ordering::Relaxed) {
+                    return None;
+                }
+                break;
+            }
         };
         if line.is_empty() {
             continue;
@@ -1833,4 +1844,29 @@ fn compute_dir_size(root: &Path) -> u64 {
         }
     }
     total
+}
+
+#[cfg(test)]
+mod remote_search_cmd {
+    use super::{SearchCase, SearchMode, build_remote_search_cmd, parse_remote_search_line};
+
+    #[test]
+    fn name_search_falls_back_without_gnu_printf() {
+        let cmd = build_remote_search_cmd("/data", "foo", SearchCase::Sensitive, SearchMode::Name);
+        assert!(cmd.contains("-printf"));
+        assert!(cmd.contains("|| find"));
+        assert!(cmd.contains("-name"));
+    }
+
+    #[test]
+    fn parse_accepts_plain_find_paths() {
+        assert_eq!(
+            parse_remote_search_line("/data/foo.txt", SearchMode::Name),
+            (false, "/data/foo.txt")
+        );
+        assert_eq!(
+            parse_remote_search_line("d\t/data/dir", SearchMode::Name),
+            (true, "/data/dir")
+        );
+    }
 }

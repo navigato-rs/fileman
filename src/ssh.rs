@@ -28,6 +28,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use sunset::{ChanData, ChanHandle, CliEvent, Event, Runner, SignKey};
@@ -44,6 +45,7 @@ const SFTP_BUF: usize = 8192;
 pub const CHUNK: usize = 256 * 1024;
 /// Socket read size.
 const SOCK_BUF: usize = 32 * 1024;
+const SOCK_TIMEOUT: Duration = Duration::from_millis(200);
 /// How much of a command's output to hold before leaving the rest on the
 /// channel. The peer's window then throttles it, rather than us discarding
 /// what does not fit.
@@ -498,6 +500,7 @@ impl Conn {
             eof: false,
             pending: Vec::new(),
             pos: 0,
+            cancel: None,
         })
     }
 }
@@ -625,13 +628,18 @@ impl Session {
                 return Ok(());
             }
             let mut buf = [0u8; SOCK_BUF];
-            let n = self
-                .sock
-                .read(&mut buf)
-                .map_err(|e| SshError::fatal(format!("socket read: {e}")))?;
-            if n == 0 {
-                return Err(SshError::fatal("connection closed by peer"));
-            }
+            let n = match self.sock.read(&mut buf) {
+                Ok(0) => return Err(SshError::fatal("connection closed by peer")),
+                Ok(n) => n,
+                Err(ref e)
+                    if e.kind() == io::ErrorKind::TimedOut
+                        || e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::Interrupted =>
+                {
+                    return Ok(());
+                }
+                Err(e) => return Err(SshError::fatal(format!("socket read: {e}"))),
+            };
             self.inbuf.clear();
             self.inbuf.extend_from_slice(&buf[..n]);
             self.in_pos = 0;
@@ -1042,19 +1050,27 @@ impl Session {
         Ok(id)
     }
 
-    /// Runs the connection until the command has output or has finished.
-    /// Returns true once nothing more will arrive.
+    /// One step of a running command. Returns true once nothing more will arrive.
+    ///
+    /// Does not wait for output: a stream reader loops this so the session
+    /// lock is released between socket waits.
     fn pump_exec(&mut self, id: u64) -> SshResult<bool> {
-        let mut done = false;
-        self.pump(|s| {
-            let e = s.exec_mut(id)?;
+        self.events()?;
+        self.drain_channels()?;
+        self.flush()?;
+        {
+            let e = self.exec_mut(id)?;
             if e.done() {
-                done = true;
                 return Ok(true);
             }
-            Ok(!e.out.is_empty() || !e.err.is_empty())
-        })?;
-        Ok(done)
+            if !e.out.is_empty() || !e.err.is_empty() {
+                return Ok(false);
+            }
+        }
+        self.feed()?;
+        self.events()?;
+        self.drain_channels()?;
+        Ok(self.exec_mut(id)?.done())
     }
 
     fn write_exec(&mut self, id: u64, data: &[u8]) -> SshResult<()> {
@@ -1119,9 +1135,15 @@ pub struct ExecStream {
     eof: bool,
     pending: Vec<u8>,
     pos: usize,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl ExecStream {
+    pub fn with_cancel(mut self, cancel: Arc<AtomicBool>) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
     /// Signals end of input, so a command reading its stdin to EOF can finish.
     pub fn finish_input(&mut self) {
         if self.stdin == Stdin::Piped {
@@ -1158,6 +1180,13 @@ impl io::Read for ExecStream {
         while self.pos == self.pending.len() {
             if self.eof {
                 return Ok(0);
+            }
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(|c| c.load(Ordering::Relaxed))
+            {
+                return Err(io::Error::other("Cancelled"));
             }
             let id = self.id;
             let (chunk, done) = self
@@ -1369,6 +1398,7 @@ fn open_session(params: &ConnectParams) -> SshResult<Session> {
         Reply::Version => (),
         other => return Err(handle_err("SFTP handshake", other)),
     }
+    let _ = session.sock.set_read_timeout(Some(SOCK_TIMEOUT));
     Ok(session)
 }
 

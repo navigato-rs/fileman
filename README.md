@@ -102,29 +102,26 @@ drivers or use the GLES fallback:
 RUSTFLAGS="--cfg gles" cargo run
 ```
 
-## App Bundling
-Install `cargo-bundle` from git (the crates.io release has a Windows bug):
-```bash
-cargo install cargo-bundle --git https://github.com/burtonageo/cargo-bundle
-```
-Then build the bundle:
-```bash
-cargo bundle --release
-```
-On macOS this produces a `.app` bundle, on Windows an `.msi` installer.
-Icons are configured in `Cargo.toml` via `package.metadata.bundle.icon`.
+## Desktop integration
 
-## Linux Desktop Integration
-Install the binary, desktop entry, and icon to `~/.local` (the standard per-user prefix):
-```bash
+```sh
 make install
 ```
-To install system-wide instead:
-```bash
+
+On Linux this puts the binary, `.desktop` entry, and icon under `~/.local`, so
+FileMan appears in the application menu. On macOS it also writes
+`~/Applications/FileMan.app` (Launchpad and Spotlight); a `.desktop` file is
+not a macOS launcher. `$(PREFIX)/bin` is on the PATH in both cases.
+
+To install system-wide instead (`/usr` on Linux, `/Applications` on macOS):
+
+```sh
 sudo make install PREFIX=/usr
 ```
+
 To remove:
-```bash
+
+```sh
 make uninstall
 ```
 

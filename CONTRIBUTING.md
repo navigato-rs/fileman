@@ -33,6 +33,7 @@ Ensure `cargo fmt` is ran and `cargo clippy` is clean.
 - `tests/cases/` — replay test cases (RON format)
 - `tests/data/` — test fixture data
 - `scripts/replay_runner.sh` — runs all replay cases with per-test cleanup
+- `scripts/macos-app.sh` — local `FileMan.app` for `make install` (ad-hoc signed)
 - `scripts/macos_package.sh` — signs, notarizes, and packages the macOS release
 
 ## Testing

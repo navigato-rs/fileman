@@ -21,6 +21,9 @@ fn sftp_connect() {
     let session = connect_localhost();
     assert_eq!(session.host, "localhost");
     assert!(session.is_alive());
+    let home = session.home_dir.expect("remote home from realpath or pwd");
+    assert!(home.starts_with('/'), "home should be absolute: {home}");
+    assert_ne!(home, "/");
 }
 
 #[test]

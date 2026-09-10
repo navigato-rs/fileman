@@ -1042,8 +1042,8 @@ pub fn start_preview_worker(
                             let force_text = is_text_name(&path);
                             let session = lock_or_recover(&sftp_sessions).get(&host).cloned();
                             if let Some(session) = session {
-                                let locked = lock_or_recover(&session);
-                                match crate::sftp::open_remote_reader(&locked.sftp, &path) {
+                                let conn = lock_or_recover(&session).sftp.clone();
+                                match crate::sftp::open_remote_reader(&conn, &path) {
                                     Ok(reader) => {
                                         if let Err(err) = send_streaming_preview(
                                             &result_tx,

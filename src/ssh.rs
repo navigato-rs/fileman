@@ -1329,19 +1329,39 @@ pub struct ConnectParams {
 pub fn connect(params: ConnectParams) -> SshResult<Conn> {
     let mut session = open_session(&params)?;
 
-    // The remote home directory, if the server will tell us.
+    // SFTP cwd after login is usually the account home. Some servers do not
+    // implement realpath, or start in `/`; a shell `pwd` fills those gaps.
     let home_dir = match session.sftp.realpath(".") {
-        Ok(_) => session.one_name("realpath .").ok(),
+        Ok(_) => session
+            .one_name("realpath .")
+            .ok()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty() && p != "." && p != "./"),
         Err(_) => None,
     };
 
-    Ok(Conn {
+    let mut conn = Conn {
         session: Mutex::new(session),
         alive: Arc::new(AtomicBool::new(true)),
         host: params.host.clone(),
         home_dir,
         params,
-    })
+    };
+    if conn.home_dir.as_deref().is_none_or(|p| p == "/")
+        && let Ok(out) = conn.exec("pwd")
+    {
+        let p = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !p.is_empty() && p != "/" && p != "." {
+            conn.home_dir = Some(p);
+        }
+    }
+
+    Ok(conn)
 }
 
 /// Dials, authenticates, and gets the SFTP subsystem talking.

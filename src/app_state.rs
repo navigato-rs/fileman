@@ -1676,17 +1676,15 @@ impl AppState {
                 path: path::PathBuf::from("/"),
                 category: QuickJumpCategory::Remote,
             });
-            // Remote home (if we have a session with home_dir)
-            if let Some(session_arc) = self.sftp_sessions.get(&host) {
-                if let Ok(session) = session_arc.try_lock() {
-                    if let Some(ref home) = session.home_dir {
-                        entries.push(QuickJumpEntry {
-                            label: format!("{host}:~"),
-                            path: path::PathBuf::from(home),
-                            category: QuickJumpCategory::Remote,
-                        });
-                    }
-                }
+            if let Some(session_arc) = self.sftp_sessions.get(&host)
+                && let Ok(session) = session_arc.try_lock()
+                && let Some(ref home) = session.home_dir
+            {
+                entries.push(QuickJumpEntry {
+                    label: format!("{host}:~"),
+                    path: path::PathBuf::from(home),
+                    category: QuickJumpCategory::Remote,
+                });
             }
         }
 

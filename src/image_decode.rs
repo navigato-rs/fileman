@@ -24,6 +24,15 @@ pub fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8
 }
 
+/// Whatever a prefix of the file can already show: JPEG EXIF thumbnail, or a
+/// complete small PNG/WebP/GIF. Truncated data returns `None`.
+pub fn decode_prefix_preview(bytes: &[u8], max_side: u32) -> Option<(DecodedImage, ImageMeta)> {
+    if is_jpeg(bytes) {
+        return decode_jpeg_exif_thumbnail(bytes, max_side);
+    }
+    decode_image_bytes(bytes, max_side)
+}
+
 /// Upper bound on decoded pixel count for the preview decoders that allocate
 /// straight from header dimensions. A crafted header can claim up to
 /// 65535×65535; without this cap that is a multi-gigabyte allocation / OOM from
@@ -1689,5 +1698,49 @@ mod jpeg_fuzz_tests {
             }
             let _ = decode_jpeg_dc_preview(&v, 256);
         }
+    }
+}
+
+#[cfg(test)]
+mod prefix_preview_tests {
+    use super::decode_prefix_preview;
+
+    fn is_png(bytes: &[u8]) -> bool {
+        bytes.len() >= 8 && bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A])
+    }
+
+    // 1×1 RGB PNG.
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xf7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn detects_png() {
+        assert!(is_png(TINY_PNG));
+        assert!(!is_png(b"\x89PNG"));
+        assert!(!is_png(&[0xff, 0xd8]));
+    }
+
+    #[test]
+    fn complete_png_decodes_from_prefix() {
+        let (decoded, meta) = decode_prefix_preview(TINY_PNG, 256).expect("tiny png");
+        assert_eq!(meta.width, 1);
+        assert_eq!(meta.height, 1);
+        let super::DecodedImage::Static(img) = decoded else {
+            panic!("expected static image");
+        };
+        assert_eq!(img.width(), 1);
+        assert_eq!(img.height(), 1);
+    }
+
+    #[test]
+    fn truncated_png_does_not_panic() {
+        let _ = decode_prefix_preview(&TINY_PNG[..20], 256);
+        let _ = decode_prefix_preview(&TINY_PNG[..8], 256);
+        let _ = decode_prefix_preview(&TINY_PNG[..4], 256);
     }
 }

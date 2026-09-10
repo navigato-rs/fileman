@@ -625,6 +625,22 @@ pub(crate) fn handle_keyboard(
     let ctrl_p = !in_edit && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::P));
     let ctrl_e = !in_edit && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::E));
     let ctrl_n = !in_edit && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::N));
+    // Shift variants before the bare Ctrl ones: consume_key(CTRL, M) also
+    // matches Ctrl+Shift+M on some platforms (macOS), which would Move.
+    let ctrl_shift_m = !in_edit
+        && ctx.input_mut(|i| {
+            i.consume_key(
+                egui::Modifiers::CTRL.plus(egui::Modifiers::SHIFT),
+                egui::Key::M,
+            )
+        });
+    let ctrl_shift_c = !in_edit
+        && ctx.input_mut(|i| {
+            i.consume_key(
+                egui::Modifiers::CTRL.plus(egui::Modifiers::SHIFT),
+                egui::Key::C,
+            )
+        });
     let ctrl_c = !in_edit
         && !search_typing
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::C));
@@ -641,20 +657,6 @@ pub(crate) fn handle_keyboard(
         && !search_typing
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::X));
     let ctrl_i = !in_edit && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::I));
-    let ctrl_shift_m = !in_edit
-        && ctx.input_mut(|i| {
-            i.consume_key(
-                egui::Modifiers::CTRL.plus(egui::Modifiers::SHIFT),
-                egui::Key::M,
-            )
-        });
-    let ctrl_shift_c = !in_edit
-        && ctx.input_mut(|i| {
-            i.consume_key(
-                egui::Modifiers::CTRL.plus(egui::Modifiers::SHIFT),
-                egui::Key::C,
-            )
-        });
     let ctrl_shift_o = !in_edit
         && ctx.input_mut(|i| {
             i.consume_key(

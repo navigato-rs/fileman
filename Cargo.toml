@@ -57,10 +57,10 @@ syntect = { version = "5", default-features = false, features = ["default-syntax
 memchr = "2.7"
 encoding_rs = "0.8"
 chardetng = "0.1"
-sunset = { git = "https://github.com/navigato-rs/sunset", rev = "d60be9f", features = ["std", "openssh-key", "rsa", "ecdsa256", "agent"] }
+sunset = { git = "https://github.com/navigato-rs/sunset", rev = "09708ad", features = ["std", "openssh-key", "rsa", "ecdsa256", "agent"] }
 # Without the `async` feature this is the SFTP protocol on its own, which is
 # what a blocking transport wants; it pulls in no executor.
-sunset-sftp = { git = "https://github.com/navigato-rs/sunset", rev = "d60be9f", default-features = false }
+sunset-sftp = { git = "https://github.com/navigato-rs/sunset", rev = "09708ad", default-features = false }
 sha1 = "0.10"
 hmac = "0.12"
 base64 = "0.22"

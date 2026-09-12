@@ -28,7 +28,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use sunset::{ChanData, ChanHandle, CliEvent, Event, Runner, SignKey};
@@ -892,8 +892,19 @@ impl Session {
     }
 
     /// Runs the connection until `done` is satisfied.
-    fn pump(&mut self, mut done: impl FnMut(&mut Self) -> SshResult<bool>) -> SshResult<()> {
+    fn pump(&mut self, done: impl FnMut(&mut Self) -> SshResult<bool>) -> SshResult<()> {
+        self.pump_deadline(None, done)
+    }
+
+    fn pump_deadline(
+        &mut self,
+        deadline: Option<Instant>,
+        mut done: impl FnMut(&mut Self) -> SshResult<bool>,
+    ) -> SshResult<()> {
         loop {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                return Err(SshError::fatal("timed out waiting for the SSH server"));
+            }
             self.events()?;
             self.drain_channels()?;
             self.flush()?;
@@ -906,8 +917,12 @@ impl Session {
 
     /// Waits for the next SFTP reply.
     fn reply(&mut self) -> SshResult<Reply> {
+        self.reply_deadline(None)
+    }
+
+    fn reply_deadline(&mut self, deadline: Option<Instant>) -> SshResult<Reply> {
         self.sftp_send(&[])?;
-        self.pump(|s| Ok(s.sftp.has_event()))?;
+        self.pump_deadline(deadline, |s| Ok(s.sftp.has_event()))?;
         let ev = self
             .sftp
             .event()
@@ -1375,6 +1390,7 @@ fn open_session(params: &ConnectParams) -> SshResult<Session> {
     // SFTP alternates a small request with a large reply. Without this, Nagle
     // holds each request back until the peer's delayed ACK.
     let _ = sock.set_nodelay(true);
+    let _ = sock.set_read_timeout(Some(SOCK_TIMEOUT));
     #[cfg(unix)]
     set_keepalive(&sock);
 
@@ -1414,11 +1430,16 @@ fn open_session(params: &ConnectParams) -> SshResult<Session> {
     }
 
     session.sftp.init().map_err(sftp_err)?;
-    match session.reply()? {
-        Reply::Version => (),
-        other => return Err(handle_err("SFTP handshake", other)),
+    match session.reply_deadline(Some(Instant::now() + Duration::from_secs(5))) {
+        Ok(Reply::Version) => (),
+        Ok(other) => return Err(handle_err("SFTP handshake", other)),
+        Err(e) => {
+            return Err(SshError::fatal(format!(
+                "SFTP is not available on {addr} ({})",
+                e.message
+            )));
+        }
     }
-    let _ = session.sock.set_read_timeout(Some(SOCK_TIMEOUT));
     Ok(session)
 }
 

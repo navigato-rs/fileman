@@ -30,6 +30,7 @@ pub fn draw_editor(ui: &mut egui::Ui, ctx: EditorRender<'_>) {
     let colors = theme.colors();
     ui.push_id("editor_panel", |ui| {
         egui::Frame::NONE
+            .fill(color32(colors.preview_bg))
             .stroke(egui::Stroke::new(
                 1.0_f32,
                 color32(if is_focused {

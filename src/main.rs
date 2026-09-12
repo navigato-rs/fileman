@@ -4427,6 +4427,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
 
                         if !right_editing {
                             ui.scope_builder(egui::UiBuilder::new().max_rect(left_rect), |ui| {
+                                ui.set_clip_rect(left_rect);
                                 if left_editing {
                                     let is_focused =
                                         runtime.app.active_panel == core::ActivePanel::Left;
@@ -4501,6 +4502,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                         }
                         if !left_editing {
                             ui.scope_builder(egui::UiBuilder::new().max_rect(right_rect), |ui| {
+                                ui.set_clip_rect(right_rect);
                                 if right_editing {
                                     let is_focused =
                                         runtime.app.active_panel == core::ActivePanel::Right;
@@ -4992,6 +4994,7 @@ fn draw_root_ui(render: UiRender<'_>) {
         if !right_editing {
             ui_cache.left_rows = ui
                 .scope_builder(egui::UiBuilder::new().max_rect(left_rect), |ui| {
+                    ui.set_clip_rect(left_rect);
                     if left_editing {
                         let is_focused = app.active_panel == core::ActivePanel::Left;
                         let theme = app.theme.clone();
@@ -5063,6 +5066,7 @@ fn draw_root_ui(render: UiRender<'_>) {
         if !left_editing {
             ui_cache.right_rows = ui
                 .scope_builder(egui::UiBuilder::new().max_rect(right_rect), |ui| {
+                    ui.set_clip_rect(right_rect);
                     if right_editing {
                         let is_focused = app.active_panel == core::ActivePanel::Right;
                         let theme = app.theme.clone();

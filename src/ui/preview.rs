@@ -119,6 +119,7 @@ pub fn draw_preview(ui: &mut egui::Ui, ctx: PreviewRender<'_>) {
 
     ui.push_id("preview_panel", |ui| {
         egui::Frame::NONE
+            .fill(color32(colors.preview_bg))
             .stroke(egui::Stroke::new(
                 1.0_f32,
                 color32(if is_focused {

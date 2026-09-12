@@ -7,7 +7,7 @@ use crate::{
     ContainerLoadMode, UiCache, active_window_rows, apply_panel_snapshot, cancel_search,
     load_container_directory_async, load_fs_directory_async, open_search, preview_find_next,
     preview_find_prev, preview_rebuild_matches, refresh_active_panel, refresh_fs_panels,
-    start_search,
+    resort_browser_entries, start_search,
 };
 
 pub(crate) fn open_selected(app: &mut app_state::AppState) {
@@ -1495,6 +1495,7 @@ pub(crate) fn confirm_pending_op(app: &mut app_state::AppState) {
                 return;
             }
             app.store_selection_memory_for(app.active_panel);
+            app.get_active_panel_mut().browser_mut().prefer_select_name = Some(name.clone());
             app.fs_last_selected_name.insert(
                 src.parent()
                     .unwrap_or_else(|| std::path::Path::new("."))
@@ -1694,12 +1695,40 @@ fn handle_inline_rename(app: &mut app_state::AppState, input: &egui::InputState)
                                     src: path.clone(),
                                     new_name: new_name.to_string(),
                                 });
+                                next_selection = Some((
+                                    browser.current_path.clone(),
+                                    new_name.to_string(),
+                                ));
                             }
                         }
                         _ => {}
                     }
+                    if action.is_some() {
+                        let entry = &mut browser.entries[rename.index];
+                        if browser.marked.remove(&entry.name) {
+                            browser.marked.insert(new_name.to_string());
+                        }
+                        match &mut entry.location {
+                            core::EntryLocation::Fs(path) => {
+                                *path = path.with_file_name(new_name);
+                            }
+                            core::EntryLocation::Remote { path, .. } => {
+                                if let Some(slash) = path.rfind('/') {
+                                    path.truncate(slash + 1);
+                                    path.push_str(new_name);
+                                } else {
+                                    *path = new_name.to_string();
+                                }
+                            }
+                            _ => {}
+                        }
+                        entry.name = new_name.to_string();
+                    }
                 }
             }
+        }
+        if action.is_some() {
+            browser.prefer_select_name = Some(new_name.to_string());
         }
         (action, next_selection, true)
     };
@@ -1712,6 +1741,7 @@ fn handle_inline_rename(app: &mut app_state::AppState, input: &egui::InputState)
         if let Some((dir, name)) = next_selection {
             app.fs_last_selected_name.insert(dir, name);
         }
+        resort_browser_entries(app.get_active_panel_mut().browser_mut());
     }
     true
 }

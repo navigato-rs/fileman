@@ -3151,11 +3151,13 @@ fn refresh_local_panels(app: &mut app_state::AppState) {
         let browser = app.panel(which).browser();
         if matches!(browser.browser_mode, core::BrowserMode::Fs) {
             let path = browser.current_path.clone();
-            let current_name = browser
-                .entries
-                .get(browser.selected_index)
-                .map(|e| e.name.clone());
-            load_fs_directory_async(app, path, which, current_name);
+            let prefer_name = browser.prefer_select_name.clone().or_else(|| {
+                browser
+                    .entries
+                    .get(browser.selected_index)
+                    .map(|e| e.name.clone())
+            });
+            load_fs_directory_async(app, path, which, prefer_name);
         }
     }
 }
@@ -3170,11 +3172,13 @@ fn refresh_remote_panels(app: &mut app_state::AppState, host: &str) {
             && h == host
         {
             let path = path.clone();
-            let current_name = browser
-                .entries
-                .get(browser.selected_index)
-                .map(|e| e.name.clone());
-            load_sftp_directory_async(app, host, &path, which, current_name);
+            let prefer_name = browser.prefer_select_name.clone().or_else(|| {
+                browser
+                    .entries
+                    .get(browser.selected_index)
+                    .map(|e| e.name.clone())
+            });
+            load_sftp_directory_async(app, host, &path, which, prefer_name);
         }
     }
 }

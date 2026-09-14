@@ -1487,8 +1487,13 @@ pub(crate) fn confirm_pending_op(app: &mut app_state::AppState) {
                 | app_state::PendingOp::Move { items, .. } => items,
                 _ => unreachable!(),
             };
-            if items.iter().enumerate().any(|(i, _)| {
-                !core::is_valid_file_name(&core::apply_name_template(&template, i))
+            let originals: Vec<String> = items.iter().map(|item| item.src.display_name()).collect();
+            if items.iter().any(|item| {
+                !core::is_valid_file_name(&core::destination_name(
+                    &template,
+                    &item.src.display_name(),
+                    &originals,
+                ))
             }) {
                 return;
             }
@@ -1711,10 +1716,8 @@ fn handle_inline_rename(app: &mut app_state::AppState, input: &egui::InputState)
                                     src: path.clone(),
                                     new_name: new_name.to_string(),
                                 });
-                                next_selection = Some((
-                                    browser.current_path.clone(),
-                                    new_name.to_string(),
-                                ));
+                                next_selection =
+                                    Some((browser.current_path.clone(), new_name.to_string()));
                             }
                         }
                         _ => {}

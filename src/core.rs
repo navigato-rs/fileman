@@ -3,8 +3,8 @@ use std::{
     io::{self, Read},
     path::{self, Path},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::UNIX_EPOCH,
 };
@@ -70,10 +70,10 @@ impl TransferProgress {
 }
 
 pub use crate::archive::{
-    container_display_path, container_kind_from_path, copy_container_dir, copy_container_entry,
-    create_archive, format_container_listing, is_container_path, normalize_archive_path,
-    read_container_bytes_prefix, read_container_directory, read_container_directory_with_progress,
-    read_container_metadata, ContainerKind,
+    ContainerKind, container_display_path, container_kind_from_path, copy_container_dir,
+    copy_container_entry, create_archive, format_container_listing, is_container_path,
+    normalize_archive_path, read_container_bytes_prefix, read_container_directory,
+    read_container_directory_with_progress, read_container_metadata,
 };
 
 #[derive(Clone)]
@@ -158,61 +158,113 @@ fn common_suffix(names: &[String], prefix_len: usize) -> &str {
 
 /// Infer a destination name template from the source names.
 ///
-/// One name is the whole string. Several names share a prefix and suffix, with
-/// `{n}` in the varying middle (`photo_{1}.jpg`). `{n}` starts at the first
-/// numeric middle, or 1.
+/// One name (or several identical names) is the whole string. Several names
+/// share a prefix and suffix, with `{1}` standing in for the part that
+/// differs (`photo_{1}.jpg`). `{1}` is that slice of each original name,
+/// not a counter.
 pub fn infer_name_template(names: &[String]) -> String {
     if names.is_empty() {
         return String::new();
     }
-    let prefix = common_prefix(names);
-    let suffix = common_suffix(names, prefix.len());
-    let middles: Vec<&str> = names
+    let (prefix, suffix) = name_template_affixes(names);
+    if names
         .iter()
-        .map(|n| {
-            let end = n.len().saturating_sub(suffix.len());
-            if prefix.len() <= end {
-                &n[prefix.len()..end]
-            } else {
-                ""
-            }
-        })
-        .collect();
-    if middles.iter().all(|m| m.is_empty()) {
-        return names[0].clone();
-    }
-    if middles
-        .iter()
-        .all(|m| !m.is_empty() && m.bytes().all(|b| b.is_ascii_digit()))
+        .all(|n| capture_between(n, prefix, suffix).is_empty())
     {
-        let width = middles[0].len();
-        let start: u64 = middles[0].parse().unwrap_or(1);
-        return format!("{prefix}{{{start:0width$}}}{suffix}");
+        return names[0].clone();
     }
     format!("{prefix}{{1}}{suffix}")
 }
 
-/// Replace the first `{digits}` in `template` with `start + index`, padded
-/// to the token's width. With no placeholder, returns the template as-is.
-pub fn apply_name_template(template: &str, index: usize) -> String {
-    let bytes = template.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'{' {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
+fn name_template_affixes(names: &[String]) -> (&str, &str) {
+    if names.is_empty() {
+        return ("", "");
+    }
+    let prefix = common_prefix(names);
+    let suffix = common_suffix(names, prefix.len());
+    (prefix, suffix)
+}
+
+fn capture_between<'a>(name: &'a str, prefix: &str, suffix: &str) -> &'a str {
+    let Some(rest) = name.strip_prefix(prefix) else {
+        return name;
+    };
+    rest.strip_suffix(suffix).unwrap_or(rest)
+}
+
+fn has_name_placeholder(template: &str) -> bool {
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        if let Some(close) = after.find('}') {
+            let inner = &after[..close];
+            if !inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit()) {
+                return true;
             }
-            if j > i + 1 && j < bytes.len() && bytes[j] == b'}' {
-                let width = j - (i + 1);
-                let start: u64 = template[i + 1..j].parse().unwrap_or(1);
-                let value = start.saturating_add(index as u64);
-                return format!("{}{value:0width$}{}", &template[..i], &template[j + 1..]);
+            rest = after;
+        } else {
+            break;
+        }
+    }
+    false
+}
+
+/// Replace `{n}` in `template` with `groups[n-1]`. `{1}` is the first group.
+/// Missing groups become empty. With no placeholder, returns the template.
+pub fn apply_name_template(template: &str, groups: &[&str]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            out.push('{');
+            rest = after;
+            continue;
+        };
+        let inner = &after[..close];
+        if !inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit()) {
+            let n: usize = inner.parse().unwrap_or(0);
+            if n >= 1 {
+                if let Some(g) = groups.get(n - 1) {
+                    out.push_str(g);
+                }
+                rest = &after[close + 1..];
+                continue;
             }
         }
-        i += 1;
+        out.push('{');
+        rest = after;
     }
-    template.to_string()
+    out.push_str(rest);
+    out
+}
+
+/// Destination name for one copied/moved item.
+///
+/// An empty template keeps `original`. `{1}` is replaced by the slice of
+/// `original` that differs across `originals`. A template with no `{n}` is
+/// used as a literal name.
+pub fn destination_name(template: &str, original: &str, originals: &[String]) -> String {
+    let template = template.trim();
+    if template.is_empty() {
+        return original.to_string();
+    }
+    if !has_name_placeholder(template) {
+        return if is_valid_file_name(template) {
+            template.to_string()
+        } else {
+            original.to_string()
+        };
+    }
+    let (prefix, suffix) = name_template_affixes(originals);
+    let group = capture_between(original, prefix, suffix);
+    let name = apply_name_template(template, &[group]);
+    if is_valid_file_name(&name) {
+        name
+    } else {
+        original.to_string()
+    }
 }
 
 #[derive(Clone)]
@@ -947,6 +999,11 @@ pub fn is_media_name(name: &str) -> bool {
     is_image_name(name) || is_audio_name(name) || is_video_name(name)
 }
 
+/// Bytes streamed for a text-file preview (F3). Larger files are truncated.
+pub const PREVIEW_TEXT_MAX: usize = 256 * 1024;
+/// Bytes streamed for a binary/hex preview.
+pub const PREVIEW_BINARY_MAX: usize = 8 * 1024;
+
 pub fn is_text_path(p: &Path) -> bool {
     matches!(
         p.extension()
@@ -957,13 +1014,22 @@ pub fn is_text_path(p: &Path) -> bool {
                 ext.as_str(),
                 "txt"
                     | "md"
+                    | "rst"
+                    | "tex"
+                    | "org"
                     | "json"
                     | "toml"
                     | "yaml"
                     | "yml"
+                    | "xml"
+                    | "html"
                     | "rs"
+                    | "py"
+                    | "sh"
                     | "log"
                     | "ini"
+                    | "cfg"
+                    | "conf"
                     | "csv"
                     | "nix"
             )
@@ -1234,38 +1300,78 @@ mod tests {
     fn name_template_one_file_is_the_name() {
         let names = vec!["readme.txt".to_string()];
         assert_eq!(infer_name_template(&names), "readme.txt");
-        assert_eq!(apply_name_template("readme.txt", 0), "readme.txt");
+        assert_eq!(
+            destination_name("readme.txt", "readme.txt", &names),
+            "readme.txt"
+        );
+        assert_eq!(
+            destination_name("notes.txt", "readme.txt", &names),
+            "notes.txt"
+        );
     }
 
     #[test]
-    fn name_template_numeric_middle() {
+    fn name_template_substitutes_original_middle() {
         let names = vec![
             "photo_1.jpg".to_string(),
             "photo_2.jpg".to_string(),
             "photo_3.jpg".to_string(),
         ];
         assert_eq!(infer_name_template(&names), "photo_{1}.jpg");
-        assert_eq!(apply_name_template("photo_{1}.jpg", 0), "photo_1.jpg");
-        assert_eq!(apply_name_template("photo_{1}.jpg", 2), "photo_3.jpg");
+        assert_eq!(
+            destination_name("photo_{1}.jpg", "photo_2.jpg", &names),
+            "photo_2.jpg"
+        );
+        assert_eq!(
+            destination_name("vacation_{1}.jpg", "photo_3.jpg", &names),
+            "vacation_3.jpg"
+        );
+        // Selection order is not a counter.
+        assert_eq!(
+            destination_name("photo_{1}.jpg", "photo_1.jpg", &names),
+            "photo_1.jpg"
+        );
     }
 
     #[test]
-    fn name_template_padded_numbers() {
+    fn name_template_padded_numbers_keep_original_digits() {
         let names = vec!["img_01.png".to_string(), "img_02.png".to_string()];
         // Shared '0' is prefix, not part of the placeholder.
         assert_eq!(infer_name_template(&names), "img_0{1}.png");
-        assert_eq!(apply_name_template("img_0{1}.png", 0), "img_01.png");
-        assert_eq!(apply_name_template("img_0{1}.png", 1), "img_02.png");
-        assert_eq!(apply_name_template("img_{01}.png", 0), "img_01.png");
-        assert_eq!(apply_name_template("img_{01}.png", 9), "img_10.png");
+        assert_eq!(
+            destination_name("img_0{1}.png", "img_01.png", &names),
+            "img_01.png"
+        );
+        assert_eq!(
+            destination_name("img_0{1}.png", "img_02.png", &names),
+            "img_02.png"
+        );
+        assert_eq!(apply_name_template("img_0{1}.png", &["1"]), "img_01.png");
+        assert_eq!(apply_name_template("img_{1}.png", &["01"]), "img_01.png");
     }
 
     #[test]
-    fn name_template_unrelated_names() {
+    fn name_template_unrelated_names_keep_originals() {
         let names = vec!["a.txt".to_string(), "b.txt".to_string()];
         assert_eq!(infer_name_template(&names), "{1}.txt");
-        assert_eq!(apply_name_template("{1}.txt", 0), "1.txt");
-        assert_eq!(apply_name_template("{1}.txt", 1), "2.txt");
+        assert_eq!(destination_name("{1}.txt", "a.txt", &names), "a.txt");
+        assert_eq!(destination_name("{1}.txt", "b.txt", &names), "b.txt");
+        assert_eq!(
+            destination_name("copy_{1}.txt", "a.txt", &names),
+            "copy_a.txt"
+        );
+        let mixed = vec![
+            "readme.md".to_string(),
+            "photo.jpg".to_string(),
+            "data.bin".to_string(),
+        ];
+        assert_eq!(infer_name_template(&mixed), "{1}");
+        assert_eq!(destination_name("{1}", "readme.md", &mixed), "readme.md");
+        assert_eq!(destination_name("{1}", "photo.jpg", &mixed), "photo.jpg");
+        assert_eq!(
+            destination_name("backup_{1}", "data.bin", &mixed),
+            "backup_data.bin"
+        );
     }
 
     #[test]

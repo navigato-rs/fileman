@@ -10,12 +10,15 @@ pub fn draw_command_bar(ui: &mut egui::Ui, app: &app_state::AppState, colors: &t
         .is_some_and(|side| *side != app.active_panel);
     // On macOS, show Ctrl+letter combos instead of F-keys (laptops lack a real F-key row).
     let use_ctrl = cfg!(target_os = "macos");
+    // Include label padding; the default Panel frame's margins made exact_size(30)
+    // shorter than the key caps, which then painted over the pane above.
+    let bar_height = (ui.text_style_height(&egui::TextStyle::Body) + 14.0).max(30.0);
     egui::Panel::bottom("command_bar")
-        .exact_size(30.0)
+        .frame(egui::Frame::NONE.fill(color32(colors.footer_bg)))
+        .exact_size(bar_height)
         .show_inside(ui, |ui| {
             egui::Frame::NONE
-                .fill(color32(colors.footer_bg))
-                .inner_margin(egui::Margin::symmetric(10, 6))
+                .inner_margin(egui::Margin::symmetric(8, 4))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         draw_refresh_indicator(ui, app, colors);

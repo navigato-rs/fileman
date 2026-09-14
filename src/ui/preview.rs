@@ -196,7 +196,8 @@ pub fn draw_preview(ui: &mut egui::Ui, ctx: PreviewRender<'_>) {
                     ui.add_space(6.0);
                 }
 
-                let page_height = ui.available_height();
+                let page_height =
+                    (ui.available_height() - ui.text_style_height(&egui::TextStyle::Body)).max(0.0);
                 let output = ui
                     .scope_builder(
                         egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(

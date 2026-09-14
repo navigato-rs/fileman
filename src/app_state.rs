@@ -7,10 +7,10 @@ use std::{
 
 use crate::core::{
     ActivePanel, BrowserMode, ContainerKind, DirBatch, DirEntry, EditLoadRequest, EditLoadResult,
-    EntryLocation, IOResult, IOTask, ImageLocation, PreviewContent, PreviewRequest, SearchCase,
-    SearchMode, SearchResult, SortMode, apply_name_template, container_display_path,
-    container_kind_from_path, format_preview_info, infer_name_template, is_image_name,
-    is_image_path, is_text_name, is_text_path, is_valid_file_name,
+    EntryLocation, IOResult, IOTask, ImageLocation, PREVIEW_BINARY_MAX, PREVIEW_TEXT_MAX,
+    PreviewContent, PreviewRequest, SearchCase, SearchMode, SearchResult, SortMode,
+    container_display_path, container_kind_from_path, destination_name, format_preview_info,
+    infer_name_template, is_image_name, is_image_path, is_text_name, is_text_path,
 };
 use crate::theme::Theme;
 
@@ -1478,9 +1478,9 @@ impl AppState {
                     return;
                 }
                 let max_bytes = if is_text_path(&path) {
-                    Some(64 * 1024)
+                    Some(PREVIEW_TEXT_MAX)
                 } else {
-                    Some(8 * 1024)
+                    Some(PREVIEW_BINARY_MAX)
                 };
                 let _ = self.preview_tx.send(PreviewRequest::Read {
                     id: request_id,
@@ -1503,9 +1503,9 @@ impl AppState {
                     return;
                 }
                 let max_bytes = if is_text_name(&inner_path) {
-                    Some(64 * 1024)
+                    Some(PREVIEW_TEXT_MAX)
                 } else {
-                    Some(8 * 1024)
+                    Some(PREVIEW_BINARY_MAX)
                 };
                 let _ = self.preview_tx.send(PreviewRequest::Read {
                     id: request_id,
@@ -1527,9 +1527,9 @@ impl AppState {
                     return;
                 }
                 let max_bytes = if is_text_name(&path) {
-                    Some(64 * 1024)
+                    Some(PREVIEW_TEXT_MAX)
                 } else {
-                    Some(8 * 1024)
+                    Some(PREVIEW_BINARY_MAX)
                 };
                 let _ = self.preview_tx.send(PreviewRequest::Read {
                     id: request_id,
@@ -1601,13 +1601,8 @@ impl AppState {
         self.rename_focus = true;
     }
 
-    fn dest_name_for(item: &CopyItem, template: &str, index: usize) -> String {
-        let name = apply_name_template(template, index);
-        if is_valid_file_name(&name) {
-            name
-        } else {
-            item.src.display_name()
-        }
+    fn dest_name_for(item: &CopyItem, template: &str, originals: &[String]) -> String {
+        destination_name(template, &item.src.display_name(), originals)
     }
 
     /// Names of existing entries a Copy/Move would overwrite at a *local*
@@ -1624,10 +1619,10 @@ impl AppState {
             return Vec::new();
         };
         let template = self.rename_input.as_deref().unwrap_or("");
+        let originals: Vec<String> = items.iter().map(|item| item.src.display_name()).collect();
         let names: Vec<String> = items
             .iter()
-            .enumerate()
-            .map(|(i, item)| Self::dest_name_for(item, template, i))
+            .map(|item| Self::dest_name_for(item, template, &originals))
             .collect();
         local_copy_collisions(dir, &names)
     }
@@ -1865,8 +1860,10 @@ impl AppState {
         match *op {
             PendingOp::Copy { ref items, ref dst } => {
                 let template = self.rename_input.clone().unwrap_or_default();
-                for (i, item) in items.iter().enumerate() {
-                    let dest_name = Self::dest_name_for(item, &template, i);
+                let originals: Vec<String> =
+                    items.iter().map(|item| item.src.display_name()).collect();
+                for item in items.iter() {
+                    let dest_name = Self::dest_name_for(item, &template, &originals);
                     let task = match (&item.src, dst) {
                         // Local → Local
                         (&EntryLocation::Fs(ref src), &CopyDest::Local(ref dst_dir)) => {
@@ -1975,8 +1972,10 @@ impl AppState {
             }
             PendingOp::Move { ref items, ref dst } => {
                 let template = self.rename_input.clone().unwrap_or_default();
-                for (i, item) in items.iter().enumerate() {
-                    let dest_name = Self::dest_name_for(item, &template, i);
+                let originals: Vec<String> =
+                    items.iter().map(|item| item.src.display_name()).collect();
+                for item in items.iter() {
+                    let dest_name = Self::dest_name_for(item, &template, &originals);
                     match (&item.src, dst) {
                         // Local → Local: native rename/move
                         (&EntryLocation::Fs(ref src), &CopyDest::Local(ref dst_dir)) => {

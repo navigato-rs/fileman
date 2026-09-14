@@ -72,7 +72,7 @@ pub fn draw_confirmation(ctx: &egui::Context, app: &mut app_state::AppState) {
                     op,
                     app_state::PendingOp::Copy { .. } | app_state::PendingOp::Move { .. }
                 ) {
-                    "Name, or photo_{1}.jpg"
+                    "{1} is that part of the original name"
                 } else {
                     "New name"
                 };

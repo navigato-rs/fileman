@@ -103,11 +103,9 @@ pub fn start_io_worker(
                     dst_dir,
                     dest_name,
                 } => {
-                    if let Err(e) = copy_recursively_as(
-                        &src,
-                        &dst_dir,
-                        std::ffi::OsStr::new(&dest_name),
-                    ) {
+                    if let Err(e) =
+                        copy_recursively_as(&src, &dst_dir, std::ffi::OsStr::new(&dest_name))
+                    {
                         if e.kind() == std::io::ErrorKind::PermissionDenied {
                             let msg = format!(
                                 "Permission denied: copy {} → {}",
@@ -1240,8 +1238,54 @@ fn send_streaming_preview<R: Read>(
         }
     }
 
-    // For 0-byte files: no chunks were sent, so send an empty text to resolve the preview.
-    if !sent_any {
+    // last=true already finished the decoder when we hit max_bytes.
+    if is_text && remaining > 0 {
+        if let Some(mut dec) = decoder.take() {
+            let mut tail = String::new();
+            let _ = dec.decode_to_string(&[], &mut tail, true);
+            if !tail.is_empty() {
+                let _ = tx.send((
+                    id,
+                    PreviewContent::TextChunk {
+                        text: tail,
+                        done: true,
+                    },
+                ));
+                sent_any = true;
+                if let Some(wake) = wake {
+                    wake();
+                }
+            }
+        }
+    }
+
+    if remaining == 0 && sent_any {
+        if is_text {
+            let cap = max_bytes.unwrap_or(0) as u64;
+            let _ = tx.send((
+                id,
+                PreviewContent::TextChunk {
+                    text: format!(
+                        "\n\n[Preview truncated at {}]",
+                        crate::core::format_size(cap)
+                    ),
+                    done: true,
+                },
+            ));
+        } else {
+            let _ = tx.send((
+                id,
+                PreviewContent::BinaryChunk {
+                    data: Vec::new(),
+                    done: true,
+                },
+            ));
+        }
+        if let Some(wake) = wake {
+            wake();
+        }
+    } else if !sent_any {
+        // 0-byte files: no chunks were sent, so send empty text to resolve the preview.
         let _ = tx.send((
             id,
             PreviewContent::TextChunk {
@@ -1877,5 +1921,42 @@ mod remote_search_cmd {
             parse_remote_search_line("d\t/data/dir", SearchMode::Name),
             (true, "/data/dir")
         );
+    }
+}
+
+#[cfg(test)]
+mod preview_stream {
+    use super::*;
+
+    fn collect_text(max_bytes: Option<usize>, data: &[u8]) -> String {
+        let (tx, rx) = mpsc::channel();
+        let current_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
+        send_streaming_preview(&tx, &current_id, 1, data, max_bytes, true, None, None).unwrap();
+        let mut text = String::new();
+        while let Ok((_, chunk)) = rx.try_recv() {
+            match chunk {
+                PreviewContent::TextChunk { text: t, .. } => text.push_str(&t),
+                _ => panic!("expected text chunk"),
+            }
+        }
+        text
+    }
+
+    #[test]
+    fn small_file_is_not_marked_truncated() {
+        let text = collect_text(Some(64), b"hello\n");
+        assert_eq!(text, "hello\n");
+        assert!(!text.contains("truncated"));
+    }
+
+    #[test]
+    fn max_bytes_appends_truncation_notice() {
+        let data = vec![b'x'; 80];
+        let text = collect_text(Some(50), &data);
+        assert!(text.starts_with("xxxxx"));
+        let at = text
+            .find("[Preview truncated at")
+            .expect("truncation notice");
+        assert!(at >= 50);
     }
 }

@@ -8,8 +8,9 @@ use std::{
 use crate::core::{
     ActivePanel, BrowserMode, ContainerKind, DirBatch, DirEntry, EditLoadRequest, EditLoadResult,
     EntryLocation, IOResult, IOTask, ImageLocation, PreviewContent, PreviewRequest, SearchCase,
-    SearchMode, SearchResult, SortMode, container_display_path, container_kind_from_path,
-    format_preview_info, is_image_name, is_image_path, is_text_name, is_text_path,
+    SearchMode, SearchResult, SortMode, apply_name_template, container_display_path,
+    container_kind_from_path, format_preview_info, infer_name_template, is_image_name,
+    is_image_path, is_text_name, is_text_path, is_valid_file_name,
 };
 use crate::theme::Theme;
 
@@ -1573,7 +1574,8 @@ impl AppState {
             return;
         }
         if let Some(op) = self.build_copy_op() {
-            self.pending_collisions = Self::op_collisions(&op);
+            self.prefill_copy_template(&op);
+            self.pending_collisions = self.op_collisions(&op);
             self.modal = Some(Modal::Confirm(op));
         }
     }
@@ -1583,15 +1585,35 @@ impl AppState {
             return;
         }
         if let Some(op) = self.build_move_op() {
-            self.pending_collisions = Self::op_collisions(&op);
+            self.prefill_copy_template(&op);
+            self.pending_collisions = self.op_collisions(&op);
             self.modal = Some(Modal::Confirm(op));
+        }
+    }
+
+    fn prefill_copy_template(&mut self, op: &PendingOp) {
+        let items = match *op {
+            PendingOp::Copy { ref items, .. } | PendingOp::Move { ref items, .. } => items,
+            _ => return,
+        };
+        let names: Vec<String> = items.iter().map(|item| item.src.display_name()).collect();
+        self.rename_input = Some(infer_name_template(&names));
+        self.rename_focus = true;
+    }
+
+    fn dest_name_for(item: &CopyItem, template: &str, index: usize) -> String {
+        let name = apply_name_template(template, index);
+        if is_valid_file_name(&name) {
+            name
+        } else {
+            item.src.display_name()
         }
     }
 
     /// Names of existing entries a Copy/Move would overwrite at a *local*
     /// destination. Remote destinations are not stat-checked here (that would
     /// require a blocking round-trip), so they return no collisions.
-    fn op_collisions(op: &PendingOp) -> Vec<String> {
+    fn op_collisions(&self, op: &PendingOp) -> Vec<String> {
         let (items, dst) = match *op {
             PendingOp::Copy { ref items, ref dst } | PendingOp::Move { ref items, ref dst } => {
                 (items, dst)
@@ -1601,17 +1623,21 @@ impl AppState {
         let CopyDest::Local(ref dir) = *dst else {
             return Vec::new();
         };
-        items
+        let template = self.rename_input.as_deref().unwrap_or("");
+        let names: Vec<String> = items
             .iter()
-            .filter_map(|item| {
-                let name = item.src.display_name();
-                if dir.join(&name).symlink_metadata().is_ok() {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect()
+            .enumerate()
+            .map(|(i, item)| Self::dest_name_for(item, template, i))
+            .collect();
+        local_copy_collisions(dir, &names)
+    }
+
+    pub fn refresh_copy_collisions(&mut self) {
+        let Some(Modal::Confirm(ref op)) = self.modal else {
+            return;
+        };
+        let op = op.clone();
+        self.pending_collisions = self.op_collisions(&op);
     }
 
     pub fn prepare_delete_selected(&mut self) {
@@ -1838,13 +1864,16 @@ impl AppState {
         };
         match *op {
             PendingOp::Copy { ref items, ref dst } => {
-                for item in items {
+                let template = self.rename_input.clone().unwrap_or_default();
+                for (i, item) in items.iter().enumerate() {
+                    let dest_name = Self::dest_name_for(item, &template, i);
                     let task = match (&item.src, dst) {
                         // Local → Local
                         (&EntryLocation::Fs(ref src), &CopyDest::Local(ref dst_dir)) => {
                             IOTask::Copy {
                                 src: src.clone(),
                                 dst_dir: dst_dir.clone(),
+                                dest_name,
                             }
                         }
                         // Local → Remote
@@ -1853,6 +1882,7 @@ impl AppState {
                                 src: src.clone(),
                                 host: host.clone(),
                                 remote_dir: path.clone(),
+                                dest_name,
                                 is_dir: item.kind == CopyKind::Directory,
                                 delete_source_on_success: false,
                             }
@@ -1871,14 +1901,14 @@ impl AppState {
                                 archive_path: archive_path.clone(),
                                 inner_path: inner_path.clone(),
                                 dst_dir: dst_dir.clone(),
-                                display_name: item.src.display_name(),
+                                display_name: dest_name.clone(),
                             },
                             CopyKind::Directory => IOTask::CopyContainerDir {
                                 kind: *kind,
                                 archive_path: archive_path.clone(),
                                 inner_path: inner_path.clone(),
                                 dst_dir: dst_dir.clone(),
-                                display_name: item.src.display_name(),
+                                display_name: dest_name.clone(),
                             },
                         },
                         // Remote → Local
@@ -1889,7 +1919,7 @@ impl AppState {
                             host: host.clone(),
                             remote_path: path.clone(),
                             dst_dir: dst_dir.clone(),
-                            name: item.src.display_name(),
+                            name: dest_name.clone(),
                             is_dir: item.kind == CopyKind::Directory,
                             delete_source_on_success: false,
                         },
@@ -1906,7 +1936,7 @@ impl AppState {
                                     host: host.clone(),
                                     src_path: path.clone(),
                                     dst_dir: dst_dir.clone(),
-                                    name: item.src.display_name(),
+                                    name: dest_name.clone(),
                                 }
                             } else {
                                 IOTask::CopyRemoteCrossHost {
@@ -1914,7 +1944,7 @@ impl AppState {
                                     src_path: path.clone(),
                                     dst_host: dst_host.clone(),
                                     dst_dir: dst_dir.clone(),
-                                    name: item.src.display_name(),
+                                    name: dest_name.clone(),
                                     is_dir: item.kind == CopyKind::Directory,
                                 }
                             }
@@ -1936,7 +1966,7 @@ impl AppState {
                             inner_path: inner_path.clone(),
                             host: host.clone(),
                             remote_dir: remote_dir.clone(),
-                            display_name: item.src.display_name(),
+                            display_name: dest_name,
                             is_dir: item.kind == CopyKind::Directory,
                         },
                     };
@@ -1944,13 +1974,16 @@ impl AppState {
                 }
             }
             PendingOp::Move { ref items, ref dst } => {
-                for item in items {
+                let template = self.rename_input.clone().unwrap_or_default();
+                for (i, item) in items.iter().enumerate() {
+                    let dest_name = Self::dest_name_for(item, &template, i);
                     match (&item.src, dst) {
                         // Local → Local: native rename/move
                         (&EntryLocation::Fs(ref src), &CopyDest::Local(ref dst_dir)) => {
                             self.enqueue_io(IOTask::Move {
                                 src: src.clone(),
                                 dst_dir: dst_dir.clone(),
+                                dest_name,
                             });
                         }
                         // Local → Remote: copy, then delete local only on success.
@@ -1961,6 +1994,7 @@ impl AppState {
                                 src: src.clone(),
                                 host: host.clone(),
                                 remote_dir: path.clone(),
+                                dest_name,
                                 is_dir: item.kind == CopyKind::Directory,
                                 delete_source_on_success: true,
                             });
@@ -1974,7 +2008,7 @@ impl AppState {
                                 host: host.clone(),
                                 remote_path: path.clone(),
                                 dst_dir: dst_dir.clone(),
-                                name: item.src.display_name(),
+                                name: dest_name,
                                 is_dir: item.kind == CopyKind::Directory,
                                 delete_source_on_success: true,
                             });
@@ -1995,7 +2029,7 @@ impl AppState {
                                 host: host.clone(),
                                 src_path: path.clone(),
                                 dst_dir: dst_dir.clone(),
-                                name: item.src.display_name(),
+                                name: dest_name,
                             });
                             continue;
                         }
@@ -2310,6 +2344,14 @@ impl AppState {
     }
 }
 
+fn local_copy_collisions(dir: &path::Path, names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| dir.join(name).symlink_metadata().is_ok())
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod collision_tests {
     use super::*;
@@ -2332,44 +2374,30 @@ mod collision_tests {
         }
     }
 
-    fn fs_item(path: &str) -> CopyItem {
-        CopyItem {
-            src: EntryLocation::Fs(path.into()),
-            kind: CopyKind::File,
-        }
-    }
-
     #[test]
     fn reports_only_existing_local_targets() {
         let dst = TmpDir::new();
         std::fs::write(dst.0.join("a.txt"), b"x").unwrap();
-        let op = PendingOp::Copy {
-            items: vec![fs_item("/src/a.txt"), fs_item("/src/b.txt")],
-            dst: CopyDest::Local(dst.0.clone()),
-        };
-        assert_eq!(AppState::op_collisions(&op), vec!["a.txt".to_string()]);
+        assert_eq!(
+            local_copy_collisions(&dst.0, &["a.txt".into(), "b.txt".into()]),
+            vec!["a.txt".to_string()]
+        );
     }
 
     #[test]
     fn move_targets_are_checked_too() {
         let dst = TmpDir::new();
         std::fs::write(dst.0.join("keep.bin"), b"x").unwrap();
-        let op = PendingOp::Move {
-            items: vec![fs_item("/src/keep.bin")],
-            dst: CopyDest::Local(dst.0.clone()),
-        };
-        assert_eq!(AppState::op_collisions(&op), vec!["keep.bin".to_string()]);
+        assert_eq!(
+            local_copy_collisions(&dst.0, &["keep.bin".into()]),
+            vec!["keep.bin".to_string()]
+        );
     }
 
     #[test]
-    fn remote_dest_reports_no_collisions() {
-        let op = PendingOp::Copy {
-            items: vec![fs_item("/src/a.txt")],
-            dst: CopyDest::Remote {
-                host: "h".into(),
-                path: "/p".into(),
-            },
-        };
-        assert!(AppState::op_collisions(&op).is_empty());
+    fn missing_dir_reports_no_collisions() {
+        assert!(
+            local_copy_collisions(std::path::Path::new("/no/such"), &["a.txt".into()]).is_empty()
+        );
     }
 }

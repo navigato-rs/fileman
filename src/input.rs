@@ -1477,6 +1477,22 @@ pub(crate) fn confirm_pending_op(app: &mut app_state::AppState) {
                 app.fs_last_selected_name.remove(parent);
             }
         }
+        if matches!(
+            op,
+            app_state::PendingOp::Copy { .. } | app_state::PendingOp::Move { .. }
+        ) {
+            let template = app.rename_input.clone().unwrap_or_default();
+            let items = match &op {
+                app_state::PendingOp::Copy { items, .. }
+                | app_state::PendingOp::Move { items, .. } => items,
+                _ => unreachable!(),
+            };
+            if items.iter().enumerate().any(|(i, _)| {
+                !core::is_valid_file_name(&core::apply_name_template(&template, i))
+            }) {
+                return;
+            }
+        }
         if let app_state::PendingOp::Rename { src } = &op {
             let name = app.rename_input.clone().unwrap_or_default();
             if name.is_empty()

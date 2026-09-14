@@ -3,8 +3,8 @@ use std::{
     io::{self, Read},
     path::{self, Path},
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
+        Arc,
     },
     time::UNIX_EPOCH,
 };
@@ -70,10 +70,10 @@ impl TransferProgress {
 }
 
 pub use crate::archive::{
-    ContainerKind, container_display_path, container_kind_from_path, copy_container_dir,
-    copy_container_entry, create_archive, format_container_listing, is_container_path,
-    normalize_archive_path, read_container_bytes_prefix, read_container_directory,
-    read_container_directory_with_progress, read_container_metadata,
+    container_display_path, container_kind_from_path, copy_container_dir, copy_container_entry,
+    create_archive, format_container_listing, is_container_path, normalize_archive_path,
+    read_container_bytes_prefix, read_container_directory, read_container_directory_with_progress,
+    read_container_metadata, ContainerKind,
 };
 
 #[derive(Clone)]
@@ -108,6 +108,111 @@ impl EntryLocation {
             }
         }
     }
+}
+
+/// True if `name` is a usable destination file or directory name.
+pub fn is_valid_file_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\\')
+}
+
+fn common_prefix<'a>(names: &'a [String]) -> &'a str {
+    let first = names[0].as_str();
+    let mut end = first.len();
+    for name in &names[1..] {
+        end = first[..end]
+            .chars()
+            .zip(name.chars())
+            .take_while(|pair| pair.0 == pair.1)
+            .map(|pair| pair.0.len_utf8())
+            .sum();
+        if end == 0 {
+            break;
+        }
+    }
+    &first[..end]
+}
+
+fn common_suffix(names: &[String], prefix_len: usize) -> &str {
+    let first = names[0].as_str();
+    let mut suffix_len = first.len().saturating_sub(prefix_len);
+    for name in names {
+        let avail = name.len().saturating_sub(prefix_len);
+        let mut n = 0;
+        for pair in first.chars().rev().zip(name.chars().rev()) {
+            if pair.0 != pair.1
+                || n + pair.0.len_utf8() > suffix_len
+                || n + pair.0.len_utf8() > avail
+            {
+                break;
+            }
+            n += pair.0.len_utf8();
+        }
+        suffix_len = n;
+        if suffix_len == 0 {
+            break;
+        }
+    }
+    &first[first.len() - suffix_len..]
+}
+
+/// Infer a destination name template from the source names.
+///
+/// One name is the whole string. Several names share a prefix and suffix, with
+/// `{n}` in the varying middle (`photo_{1}.jpg`). `{n}` starts at the first
+/// numeric middle, or 1.
+pub fn infer_name_template(names: &[String]) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    let prefix = common_prefix(names);
+    let suffix = common_suffix(names, prefix.len());
+    let middles: Vec<&str> = names
+        .iter()
+        .map(|n| {
+            let end = n.len().saturating_sub(suffix.len());
+            if prefix.len() <= end {
+                &n[prefix.len()..end]
+            } else {
+                ""
+            }
+        })
+        .collect();
+    if middles.iter().all(|m| m.is_empty()) {
+        return names[0].clone();
+    }
+    if middles
+        .iter()
+        .all(|m| !m.is_empty() && m.bytes().all(|b| b.is_ascii_digit()))
+    {
+        let width = middles[0].len();
+        let start: u64 = middles[0].parse().unwrap_or(1);
+        return format!("{prefix}{{{start:0width$}}}{suffix}");
+    }
+    format!("{prefix}{{1}}{suffix}")
+}
+
+/// Replace the first `{digits}` in `template` with `start + index`, padded
+/// to the token's width. With no placeholder, returns the template as-is.
+pub fn apply_name_template(template: &str, index: usize) -> String {
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 1 && j < bytes.len() && bytes[j] == b'}' {
+                let width = j - (i + 1);
+                let start: u64 = template[i + 1..j].parse().unwrap_or(1);
+                let value = start.saturating_add(index as u64);
+                return format!("{}{value:0width$}{}", &template[..i], &template[j + 1..]);
+            }
+        }
+        i += 1;
+    }
+    template.to_string()
 }
 
 #[derive(Clone)]
@@ -199,6 +304,7 @@ pub enum IOTask {
     Copy {
         src: path::PathBuf,
         dst_dir: path::PathBuf,
+        dest_name: String,
     },
     CopyContainer {
         kind: ContainerKind,
@@ -217,6 +323,7 @@ pub enum IOTask {
     Move {
         src: path::PathBuf,
         dst_dir: path::PathBuf,
+        dest_name: String,
     },
     Delete {
         target: path::PathBuf,
@@ -267,6 +374,7 @@ pub enum IOTask {
         src: path::PathBuf,
         host: String,
         remote_dir: String,
+        dest_name: String,
         is_dir: bool,
         /// When true (a cross-location Move), delete the local source after the
         /// copy has verifiably succeeded. The delete never runs on copy failure.
@@ -347,8 +455,9 @@ impl IOTask {
             p.rsplit('/').next().unwrap_or(p).to_string()
         }
         match *self {
-            IOTask::Copy { ref src, .. } => fs_name(src),
-            IOTask::Move { ref src, .. } => fs_name(src),
+            IOTask::Copy { ref dest_name, .. } | IOTask::Move { ref dest_name, .. } => {
+                dest_name.clone()
+            }
             IOTask::Delete { ref target } => fs_name(target),
             IOTask::Rename { ref src, .. } => fs_name(src),
             IOTask::WriteFile { ref path, .. } => fs_name(path),
@@ -371,7 +480,7 @@ impl IOTask {
             } => fs_name(archive_path),
             IOTask::WriteRemoteFile { ref path, .. } => remote_name(path),
             IOTask::CopyRemoteToLocal { ref name, .. } => name.clone(),
-            IOTask::CopyLocalToRemote { ref src, .. } => fs_name(src),
+            IOTask::CopyLocalToRemote { ref dest_name, .. } => dest_name.clone(),
             IOTask::DeleteRemote { ref items, .. } => {
                 if items.len() == 1 {
                     remote_name(&items[0].0)
@@ -506,8 +615,15 @@ pub fn copy_recursively(src: &Path, dst_dir: &Path) -> io::Result<()> {
     let src_name = src
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source has no file name"))?;
+    copy_recursively_as(src, dst_dir, src_name)
+}
 
-    let dest = dst_dir.join(src_name);
+pub fn copy_recursively_as(
+    src: &Path,
+    dst_dir: &Path,
+    dest_name: &std::ffi::OsStr,
+) -> io::Result<()> {
+    let dest = dst_dir.join(dest_name);
 
     // Prevent copying a file or directory onto itself. When both panels show
     // the same directory, `dest` resolves to `src`; without this guard
@@ -1112,5 +1228,50 @@ mod tests {
         assert_eq!(fs::read(dst_dir.path().join("doc.txt")).unwrap(), b"hello");
         // Original must remain.
         assert_eq!(fs::read(&file).unwrap(), b"hello");
+    }
+
+    #[test]
+    fn name_template_one_file_is_the_name() {
+        let names = vec!["readme.txt".to_string()];
+        assert_eq!(infer_name_template(&names), "readme.txt");
+        assert_eq!(apply_name_template("readme.txt", 0), "readme.txt");
+    }
+
+    #[test]
+    fn name_template_numeric_middle() {
+        let names = vec![
+            "photo_1.jpg".to_string(),
+            "photo_2.jpg".to_string(),
+            "photo_3.jpg".to_string(),
+        ];
+        assert_eq!(infer_name_template(&names), "photo_{1}.jpg");
+        assert_eq!(apply_name_template("photo_{1}.jpg", 0), "photo_1.jpg");
+        assert_eq!(apply_name_template("photo_{1}.jpg", 2), "photo_3.jpg");
+    }
+
+    #[test]
+    fn name_template_padded_numbers() {
+        let names = vec!["img_01.png".to_string(), "img_02.png".to_string()];
+        // Shared '0' is prefix, not part of the placeholder.
+        assert_eq!(infer_name_template(&names), "img_0{1}.png");
+        assert_eq!(apply_name_template("img_0{1}.png", 0), "img_01.png");
+        assert_eq!(apply_name_template("img_0{1}.png", 1), "img_02.png");
+        assert_eq!(apply_name_template("img_{01}.png", 0), "img_01.png");
+        assert_eq!(apply_name_template("img_{01}.png", 9), "img_10.png");
+    }
+
+    #[test]
+    fn name_template_unrelated_names() {
+        let names = vec!["a.txt".to_string(), "b.txt".to_string()];
+        assert_eq!(infer_name_template(&names), "{1}.txt");
+        assert_eq!(apply_name_template("{1}.txt", 0), "1.txt");
+        assert_eq!(apply_name_template("{1}.txt", 1), "2.txt");
+    }
+
+    #[test]
+    fn name_template_rejects_path_separators() {
+        assert!(!is_valid_file_name("../x"));
+        assert!(!is_valid_file_name("a/b"));
+        assert!(is_valid_file_name("photo_1.jpg"));
     }
 }

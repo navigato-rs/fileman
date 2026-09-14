@@ -22,10 +22,19 @@ pub fn draw_confirmation(ctx: &egui::Context, app: &mut app_state::AppState) {
     );
     let mut confirmed = false;
     let mut cancelled = false;
-    let is_rename = matches!(
+    let has_name_field = matches!(
         op,
-        app_state::PendingOp::Rename { .. } | app_state::PendingOp::Pack { .. }
+        app_state::PendingOp::Rename { .. }
+            | app_state::PendingOp::Pack { .. }
+            | app_state::PendingOp::Copy { .. }
+            | app_state::PendingOp::Move { .. }
     );
+    if matches!(
+        op,
+        app_state::PendingOp::Copy { .. } | app_state::PendingOp::Move { .. }
+    ) {
+        app.refresh_copy_collisions();
+    }
     let collisions = &app.pending_collisions;
     let overwrite = !collisions.is_empty();
 
@@ -56,13 +65,21 @@ pub fn draw_confirmation(ctx: &egui::Context, app: &mut app_state::AppState) {
                     ui.colored_label(warn, format!("  … and {} more", collisions.len() - 6));
                 }
             }
-            if is_rename {
+            if has_name_field {
                 ui.add_space(8.0);
                 let mut name = app.rename_input.clone().unwrap_or_default();
+                let hint = if matches!(
+                    op,
+                    app_state::PendingOp::Copy { .. } | app_state::PendingOp::Move { .. }
+                ) {
+                    "Name, or photo_{1}.jpg"
+                } else {
+                    "New name"
+                };
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut name)
-                        .desired_width(260.0)
-                        .hint_text("New name"),
+                        .desired_width(280.0)
+                        .hint_text(hint),
                 );
                 if app.rename_focus {
                     response.request_focus();
@@ -74,7 +91,16 @@ pub fn draw_confirmation(ctx: &egui::Context, app: &mut app_state::AppState) {
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    let ok = ui.add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0)));
+                    let ok_label = if overwrite
+                        && matches!(
+                            op,
+                            app_state::PendingOp::Copy { .. } | app_state::PendingOp::Move { .. }
+                        ) {
+                        "Overwrite"
+                    } else {
+                        "OK"
+                    };
+                    let ok = ui.add(egui::Button::new(ok_label).min_size(egui::vec2(80.0, 0.0)));
                     let cancel =
                         ui.add(egui::Button::new("Cancel").min_size(egui::vec2(80.0, 0.0)));
                     if ok.clicked() {
@@ -100,13 +126,13 @@ pub fn draw_confirmation(ctx: &egui::Context, app: &mut app_state::AppState) {
             }
         });
 
-    if !is_rename {
+    if !has_name_field {
         if enter {
             confirmed = true;
         }
-        if escape {
-            cancelled = true;
-        }
+    }
+    if escape {
+        cancelled = true;
     }
 
     if confirmed {

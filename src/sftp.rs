@@ -647,14 +647,10 @@ pub fn copy_local_dir_to_remote_via_tar(
     src_path: &std::path::Path,
     conn: &Arc<Conn>,
     dst_dir: &str,
+    dest_name: &str,
     cancel: &AtomicBool,
     progress: Option<&crate::core::TransferProgress>,
 ) -> Result<(), String> {
-    let src_name = src_path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("dir");
-
     pipe_archive_to_tar(conn, dst_dir, "xf -", |stream| {
         let mut writer = TrackedWriter {
             inner: io::BufWriter::with_capacity(1 << 20, stream),
@@ -662,7 +658,7 @@ pub fn copy_local_dir_to_remote_via_tar(
             progress,
         };
         let mut ar = tar::Builder::new(&mut writer);
-        ar.append_dir_all(src_name, src_path)?;
+        ar.append_dir_all(dest_name, src_path)?;
         ar.finish()?;
         drop(ar);
         writer.flush()

@@ -210,11 +210,13 @@ pub fn execute_elevated(task: &IOTask) -> Result<(), String> {
         IOTask::Copy {
             ref src,
             ref dst_dir,
-        } => elevated_copy(src, dst_dir),
+            ref dest_name,
+        } => elevated_copy(src, dst_dir, dest_name),
         IOTask::Move {
             ref src,
             ref dst_dir,
-        } => elevated_move(src, dst_dir),
+            ref dest_name,
+        } => elevated_move(src, dst_dir, dest_name),
         IOTask::Rename {
             ref src,
             ref new_name,
@@ -258,15 +260,15 @@ fn elevated_delete(target: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn elevated_copy(src: &Path, dst_dir: &Path) -> Result<(), String> {
+fn elevated_copy(src: &Path, dst_dir: &Path, dest_name: &str) -> Result<(), String> {
     let src_str = src.to_string_lossy();
-    let dst_str = dst_dir.to_string_lossy();
+    let dst_str = dst_dir.join(dest_name).to_string_lossy().into_owned();
     run_elevated("cp", &["-r", &src_str, &dst_str])
 }
 
 #[cfg(windows)]
-fn elevated_copy(src: &Path, dst_dir: &Path) -> Result<(), String> {
-    let dst = dst_dir.join(src.file_name().unwrap_or_default());
+fn elevated_copy(src: &Path, dst_dir: &Path, dest_name: &str) -> Result<(), String> {
+    let dst = dst_dir.join(dest_name);
     let src_str = src.to_string_lossy();
     let dst_str = dst.to_string_lossy();
     if src.is_dir() {
@@ -280,16 +282,16 @@ fn elevated_copy(src: &Path, dst_dir: &Path) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn elevated_move(src: &Path, dst_dir: &Path) -> Result<(), String> {
+fn elevated_move(src: &Path, dst_dir: &Path, dest_name: &str) -> Result<(), String> {
     let src_str = src.to_string_lossy();
-    let dst_str = dst_dir.to_string_lossy();
+    let dst_str = dst_dir.join(dest_name).to_string_lossy().into_owned();
     run_elevated("mv", &[&src_str, &dst_str])
 }
 
 #[cfg(windows)]
-fn elevated_move(src: &Path, dst_dir: &Path) -> Result<(), String> {
+fn elevated_move(src: &Path, dst_dir: &Path, dest_name: &str) -> Result<(), String> {
     let src_str = src.to_string_lossy();
-    let dst_str = dst_dir.to_string_lossy();
+    let dst_str = dst_dir.join(dest_name).to_string_lossy().into_owned();
     run_elevated("cmd", &["/C", "move", "/y", &src_str, &dst_str])
 }
 

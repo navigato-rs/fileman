@@ -349,8 +349,15 @@ fn sftp_copy_local_dir_to_remote_via_tar() {
     sftp::mkdir(&session.sftp, remote_parent).expect("mkdir");
 
     let cancel = AtomicBool::new(false);
-    sftp::copy_local_dir_to_remote_via_tar(&local, &session.sftp, remote_parent, &cancel, None)
-        .expect("tar copy up");
+    sftp::copy_local_dir_to_remote_via_tar(
+        &local,
+        &session.sftp,
+        remote_parent,
+        "fileman_tar_up",
+        &cancel,
+        None,
+    )
+    .expect("tar copy up");
 
     let uploaded = format!("{remote_parent}/fileman_tar_up");
     assert_eq!(

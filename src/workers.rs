@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::core::{
     EntryLocation, IOResult, IOTask, PreviewContent, PreviewRequest, SearchCase, SearchEvent,
     SearchMode, SearchProgress, SearchRequest, SearchResult, copy_container_dir,
-    copy_container_entry, copy_recursively, create_archive, format_container_listing,
+    copy_container_entry, copy_recursively_as, create_archive, format_container_listing,
     is_probably_text, is_text_name, is_text_path, read_container_directory,
 };
 use crate::sftp::SftpSession;
@@ -98,8 +98,16 @@ pub fn start_io_worker(
             let mut io_result = IOResult::Completed;
             let task_clone = task.clone();
             match task {
-                IOTask::Copy { src, dst_dir } => {
-                    if let Err(e) = copy_recursively(&src, &dst_dir) {
+                IOTask::Copy {
+                    src,
+                    dst_dir,
+                    dest_name,
+                } => {
+                    if let Err(e) = copy_recursively_as(
+                        &src,
+                        &dst_dir,
+                        std::ffi::OsStr::new(&dest_name),
+                    ) {
                         if e.kind() == std::io::ErrorKind::PermissionDenied {
                             let msg = format!(
                                 "Permission denied: copy {} → {}",
@@ -200,6 +208,7 @@ pub fn start_io_worker(
                                 &extracted,
                                 &locked.sftp,
                                 &remote_dir,
+                                &display_name,
                                 &cancel_flag,
                                 Some(&transfer_progress),
                             )
@@ -219,12 +228,12 @@ pub fn start_io_worker(
                         Err(e) => IOResult::ErrorRemote(host, format!("Copy to remote: {e}")),
                     };
                 }
-                IOTask::Move { src, dst_dir } => {
-                    let target = dst_dir.join(
-                        src.file_name()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "moved".to_string()),
-                    );
+                IOTask::Move {
+                    src,
+                    dst_dir,
+                    dest_name,
+                } => {
+                    let target = dst_dir.join(&dest_name);
                     if let Err(e) = std::fs::rename(&src, &target) {
                         if e.kind() == std::io::ErrorKind::PermissionDenied {
                             let msg = format!(
@@ -237,7 +246,9 @@ pub fn start_io_worker(
                                 message: msg,
                                 task: task_clone,
                             };
-                        } else if let Err(copy_err) = copy_recursively(&src, &dst_dir) {
+                        } else if let Err(copy_err) =
+                            copy_recursively_as(&src, &dst_dir, std::ffi::OsStr::new(&dest_name))
+                        {
                             if copy_err.kind() == std::io::ErrorKind::PermissionDenied {
                                 let msg = format!(
                                     "Permission denied: move {} → {}",
@@ -542,6 +553,7 @@ pub fn start_io_worker(
                     src,
                     host,
                     remote_dir,
+                    dest_name,
                     is_dir,
                     delete_source_on_success,
                 } => {
@@ -555,15 +567,12 @@ pub fn start_io_worker(
                                 &src,
                                 &locked.sftp,
                                 &remote_dir,
+                                &dest_name,
                                 &cancel_flag,
                                 Some(&transfer_progress),
                             )
                         } else {
-                            let name = src
-                                .file_name()
-                                .map(|s| s.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "file".to_string());
-                            let remote_path = format!("{remote_dir}/{name}");
+                            let remote_path = format!("{remote_dir}/{dest_name}");
                             crate::sftp::copy_local_to_remote_progress(
                                 &locked.sftp,
                                 &src,

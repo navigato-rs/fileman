@@ -38,7 +38,7 @@ install -m 755 "$binary" "$macos/fileman"
 sed "s/@VERSION@/$version/g" "$root/etc/macos/Info.plist" >"$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
 
-# iconutil names are pixel size and density. Source icon.png is 256×256.
+# iconutil names are pixel size and density. Source icon.png is full-bleed 1024×1024.
 sips -z 16 16 "$icon" --out "$iconset/icon_16x16.png" >/dev/null
 sips -z 32 32 "$icon" --out "$iconset/icon_16x16@2x.png" >/dev/null
 sips -z 32 32 "$icon" --out "$iconset/icon_32x32.png" >/dev/null

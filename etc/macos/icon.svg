@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Full-bleed; macOS applies the squircle. Same art as etc/fileman.svg without the outer rounded frame. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c2434"/>
+      <stop offset="1" stop-color="#242f44"/>
+    </linearGradient>
+    <linearGradient id="panelL" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a3c60"/>
+      <stop offset="1" stop-color="#1f2c44"/>
+    </linearGradient>
+    <linearGradient id="panelR" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#24314d"/>
+      <stop offset="1" stop-color="#1c2638"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg)"/>
+  <rect x="16" y="32" width="104" height="192" rx="10" fill="url(#panelL)" stroke="#182238" stroke-width="4"/>
+  <rect x="136" y="32" width="104" height="192" rx="10" fill="url(#panelR)" stroke="#182238" stroke-width="4"/>
+  <rect x="124" y="32" width="8" height="192" fill="#2b3a55"/>
+  <rect x="28" y="52" width="80" height="14" rx="6" fill="#5fa2ff"/>
+  <rect x="28" y="76" width="58" height="10" rx="5" fill="#3e547a"/>
+  <rect x="148" y="52" width="80" height="10" rx="5" fill="#3e547a"/>
+  <rect x="148" y="70" width="66" height="10" rx="5" fill="#3e547a"/>
+</svg>

@@ -1512,7 +1512,7 @@ fn draw_connecting_modal(ctx: &egui::Context, host: &str) {
         });
 }
 
-fn draw_error_modal(ctx: &egui::Context, message: &str) {
+fn draw_error_modal(ctx: &egui::Context, message: &str) -> bool {
     let screen = ctx.content_rect();
     let overlay_layer = egui::LayerId::new(egui::Order::Middle, "error_overlay".into());
     ctx.layer_painter(overlay_layer).rect_filled(
@@ -1520,6 +1520,7 @@ fn draw_error_modal(ctx: &egui::Context, message: &str) {
         egui::CornerRadius::ZERO,
         egui::Color32::from_black_alpha(160),
     );
+    let mut closed = false;
     egui::Window::new("Error")
         .order(egui::Order::Foreground)
         .collapsible(false)
@@ -1533,9 +1534,10 @@ fn draw_error_modal(ctx: &egui::Context, message: &str) {
                 .add(egui::Button::new("OK").min_size(egui::vec2(80.0, 0.0)))
                 .clicked()
             {
-                // Handled via input.rs — this is just for mouse users
+                closed = true;
             }
         });
+    closed
 }
 
 fn draw_elevation_modal(ctx: &egui::Context, message: &str) -> Option<bool> {
@@ -4678,8 +4680,10 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                             None => {}
                         }
                     }
-                    if let Some(msg) = runtime.app.error_message().map(|s| s.to_string()) {
-                        draw_error_modal(&ctx, &msg);
+                    if let Some(msg) = runtime.app.error_message().map(|s| s.to_string())
+                        && draw_error_modal(&ctx, &msg)
+                    {
+                        runtime.app.close_modal();
                     }
                     draw_async_indicator(&ctx, &runtime.app);
                 });

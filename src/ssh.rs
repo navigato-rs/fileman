@@ -23,7 +23,7 @@
 use std::{
     collections::HashMap,
     io::{self, Read as _, Write as _},
-    net::TcpStream,
+    net::{TcpStream, ToSocketAddrs as _},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -1379,14 +1379,45 @@ pub fn connect(params: ConnectParams) -> SshResult<Conn> {
     Ok(conn)
 }
 
+fn describe_connect_error(host: &str, port: u16, err: &io::Error) -> String {
+    match err.kind() {
+        io::ErrorKind::ConnectionRefused => format!("Connection refused by {host}:{port}"),
+        io::ErrorKind::TimedOut => format!("Timed out connecting to {host}:{port}"),
+        _ => format!("Can't connect to {host}:{port}"),
+    }
+}
+
+fn dial(host: &str, port: u16) -> SshResult<TcpStream> {
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|_| SshError::fatal(format!("Can't find host {host}")))?;
+    let mut last_err = None;
+    for addr in addrs {
+        match TcpStream::connect(addr) {
+            Ok(sock) => return Ok(sock),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(SshError::fatal(match last_err {
+        Some(err) => describe_connect_error(host, port, &err),
+        None => format!("Can't find host {host}"),
+    }))
+}
+
 /// Dials, authenticates, and gets the SFTP subsystem talking.
 ///
 /// Separate from [`connect()`] so a dropped connection can be rebuilt in
 /// place without the caller knowing.
 fn open_session(params: &ConnectParams) -> SshResult<Session> {
-    let addr = format!("{}:{}", params.hostname, params.port);
-    let sock = TcpStream::connect(&addr)
-        .map_err(|e| SshError::fatal(format!("TCP connect to {addr}: {e}")))?;
+    let host = params.hostname.trim();
+    if host.is_empty() {
+        return Err(SshError::fatal(format!(
+            "No hostname configured for {}",
+            params.host
+        )));
+    }
+    let addr = format!("{}:{}", host, params.port);
+    let sock = dial(host, params.port)?;
     // SFTP alternates a small request with a large reply. Without this, Nagle
     // holds each request back until the peer's delayed ACK.
     let _ = sock.set_nodelay(true);
@@ -1506,4 +1537,19 @@ fn load_identities(paths: &[String]) -> Vec<SignKey> {
     // Keys are offered by popping from the end, so restore the caller's order.
     keys.reverse();
     keys
+}
+
+#[cfg(test)]
+mod connect_error_tests {
+    use super::describe_connect_error;
+    use std::io;
+
+    #[test]
+    fn refused_is_plain() {
+        let err = io::Error::new(io::ErrorKind::ConnectionRefused, "connection refused");
+        assert_eq!(
+            describe_connect_error("example.com", 22, &err),
+            "Connection refused by example.com:22"
+        );
+    }
 }

@@ -11,8 +11,7 @@ use std::io::Read;
 use fileman::sftp;
 
 fn connect_localhost() -> sftp::SftpSession {
-    let config = sftp::load_ssh_config();
-    sftp::connect("localhost", &config).expect("connect to localhost")
+    sftp::connect("localhost").expect("connect to localhost")
 }
 
 #[test]
@@ -242,20 +241,22 @@ Host jump
     IdentityFile ~/.ssh/jump_key
     IdentityFile ~/.ssh/backup_key
 ";
-    let parsed = sftp::parse_ssh_config(config_text);
+    let parsed = sunset_client::config::Config::parse(config_text, std::path::Path::new("/tmp"))
+        .expect("parse config");
+    let aliases = parsed.aliases();
+    assert!(aliases.iter().any(|a| a == "myserver"));
+    assert!(aliases.iter().any(|a| a == "jump"));
+    assert!(!aliases.iter().any(|a| a.contains('*')));
 
-    let my = parsed.get("myserver").expect("myserver");
-    assert_eq!(my.hostname.as_deref(), Some("10.0.0.1"));
+    let my = parsed.resolve("myserver").expect("myserver");
+    assert_eq!(my.host, "10.0.0.1");
     assert_eq!(my.user.as_deref(), Some("deploy"));
     assert_eq!(my.port, Some(2222));
-    assert_eq!(my.identity_files.len(), 1);
+    assert_eq!(my.identities.len(), 1);
 
-    // Wildcard host should be excluded
-    assert!(!parsed.contains_key("*.example.com"));
-
-    let jump = parsed.get("jump").expect("jump");
-    assert_eq!(jump.hostname.as_deref(), Some("jump.internal"));
-    assert_eq!(jump.identity_files.len(), 2);
+    let jump = parsed.resolve("jump").expect("jump");
+    assert_eq!(jump.host, "jump.internal");
+    assert_eq!(jump.identities.len(), 2);
 }
 
 // --- exec-backed operations ---
@@ -544,15 +545,25 @@ fn sftp_reconnects_after_the_session_drops() {
     }
     std::thread::sleep(std::time::Duration::from_millis(400));
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let conn = fileman::ssh::connect(fileman::ssh::ConnectParams {
-        host: "localhost".into(),
-        hostname: "127.0.0.1".into(),
-        port: PORT,
-        user: std::env::var("USER").unwrap_or_else(|_| "root".into()),
-        identity_files: vec![format!("{home}/.ssh/id_ed25519")],
-        use_agent: false,
-    })
+    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+    let conn = fileman::ssh::connect(
+        "localhost",
+        sunset_client::Options {
+            host: "127.0.0.1".into(),
+            port: PORT,
+            user: std::env::var("USER").unwrap_or_else(|_| "root".into()),
+            known_hosts: home.join(".ssh/known_hosts"),
+            authentication: sunset_client::Authentication {
+                files: vec![home.join(".ssh/id_ed25519")],
+                agent: false,
+                identities_only: true,
+            },
+            host_key_alias: None,
+            strict_host_key_checking: sunset_client::StrictHostKeyChecking::AcceptNew,
+            timeout: fileman::ssh::connect_timeout(),
+            jumps: Vec::new(),
+        },
+    )
     .expect("connect");
     assert!(conn.stat("/tmp").expect("stat before").is_dir());
 

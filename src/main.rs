@@ -1688,11 +1688,10 @@ fn navigate_sftp(
     }
     // Spawn SFTP connection in a background thread
     let host_owned = host.to_string();
-    let ssh_config = fileman::sftp::load_ssh_config();
     let (tx, rx) = std::sync::mpsc::channel();
     let wake = app.wake.clone();
     std::thread::spawn(move || {
-        let result = fileman::sftp::connect(&host_owned, &ssh_config);
+        let result = fileman::sftp::connect(&host_owned);
         let _ = tx.send(result);
         if let Some(ref wake) = wake {
             wake();

@@ -437,15 +437,6 @@ checksum = "0d8c1fef690941d3e7788d328517591fecc684c084084702d6ff1641e993699a"
 
 [[package]]
 name = "block-buffer"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
-dependencies = [
- "generic-array",
-]
-
-[[package]]
-name = "block-buffer"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
@@ -669,7 +660,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
 dependencies = [
- "block-buffer 0.12.1",
+ "block-buffer",
  "crypto-common 0.2.2",
  "inout 0.2.2",
  "zeroize",
@@ -971,7 +962,7 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
  "curve25519-dalek-derive",
- "digest 0.11.3",
+ "digest",
  "fiat-crypto",
  "rand_core 0.10.1",
  "rustc_version",
@@ -1042,22 +1033,11 @@ dependencies = [
 
 [[package]]
 name = "digest"
-version = "0.10.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
-dependencies = [
- "block-buffer 0.10.4",
- "crypto-common 0.1.7",
- "subtle",
-]
-
-[[package]]
-name = "digest"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
- "block-buffer 0.12.1",
+ "block-buffer",
  "const-oid",
  "crypto-common 0.2.2",
  "ctutils",
@@ -1118,7 +1098,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c0681a4fc24c767085329728d8dfba959af91228aa4610cca4f8ce317ba46ae0"
 dependencies = [
  "der",
- "digest 0.11.3",
+ "digest",
  "elliptic-curve",
  "rfc6979",
  "signature",
@@ -1216,7 +1196,7 @@ dependencies = [
  "base16ct",
  "crypto-bigint",
  "crypto-common 0.2.2",
- "digest 0.11.3",
+ "digest",
  "ff",
  "group",
  "hkdf",
@@ -1399,7 +1379,6 @@ name = "fileman"
 version = "0.4.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "blade-egui",
  "blade-graphics",
  "bzip2",
@@ -1411,7 +1390,6 @@ dependencies = [
  "env_logger",
  "flate2",
  "gif",
- "hmac 0.12.1",
  "image-webp",
  "kamadak-exif",
  "libc",
@@ -1424,8 +1402,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yml",
- "sha1",
- "sunset",
+ "sunset-client",
  "sunset-sftp",
  "syntect",
  "tar",
@@ -1783,16 +1760,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
 dependencies = [
- "hmac 0.13.0",
-]
-
-[[package]]
-name = "hmac"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
-dependencies = [
- "digest 0.10.7",
+ "hmac",
 ]
 
 [[package]]
@@ -1801,7 +1769,7 @@ version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
- "digest 0.11.3",
+ "digest",
 ]
 
 [[package]]
@@ -3302,7 +3270,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4a459cddafb3fe76b31fd8f1108007566c40301feb64dc7b54656eb7388172b"
 dependencies = [
  "crypto-bigint",
- "hmac 0.13.0",
+ "hmac",
 ]
 
 [[package]]
@@ -3348,7 +3316,7 @@ dependencies = [
  "const-oid",
  "crypto-bigint",
  "crypto-primes",
- "digest 0.11.3",
+ "digest",
  "pkcs1",
  "pkcs8",
  "rand_core 0.10.1",
@@ -3450,11 +3418,11 @@ dependencies = [
  "chacha20poly1305",
  "crypto-common 0.2.2",
  "der",
- "digest 0.11.3",
+ "digest",
  "ecdsa",
  "ed25519-dalek",
  "getrandom 0.4.3",
- "hmac 0.13.0",
+ "hmac",
  "p256",
  "p384",
  "paste",
@@ -3710,13 +3678,13 @@ dependencies = [
 
 [[package]]
 name = "sha1"
-version = "0.10.7"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
+checksum = "aacc4cc499359472b4abe1bf11d0b12e688af9a805fa5e3016f9a386dc2d0214"
 dependencies = [
  "cfg-if",
- "cpufeatures 0.2.17",
- "digest 0.10.7",
+ "cpufeatures 0.3.1",
+ "digest",
 ]
 
 [[package]]
@@ -3727,7 +3695,7 @@ checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
- "digest 0.11.3",
+ "digest",
 ]
 
 [[package]]
@@ -3736,7 +3704,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be176f1a57ce4e3d31c1a166222d9768de5954f811601fb7ca06fc8203905ce1"
 dependencies = [
- "digest 0.11.3",
+ "digest",
  "keccak",
 ]
 
@@ -3752,7 +3720,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 dependencies = [
- "digest 0.11.3",
+ "digest",
  "rand_core 0.10.1",
 ]
 
@@ -3931,7 +3899,7 @@ dependencies = [
  "base64ct",
  "crypto-bigint",
  "ctutils",
- "digest 0.11.3",
+ "digest",
  "pem-rfc7468",
  "zeroize",
 ]
@@ -3943,6 +3911,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9a32fae177b74a22aa9c5b01bf7e68b33545be32d9e381e248058d2adc15ce3"
 dependencies = [
  "ctutils",
+ "ed25519-dalek",
  "p256",
  "rand_core 0.10.1",
  "rsa",
@@ -3975,19 +3944,19 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sunset"
 version = "0.6.0"
-source = "git+https://github.com/navigato-rs/sunset?rev=09708ad#09708add6c803d8f5a679a8050d52e1e1c11980e"
+source = "git+https://github.com/navigato-rs/sunset?rev=7b2b713#7b2b7137ce33c4d080d507e3d7f19b1e1cc895f3"
 dependencies = [
  "aes",
  "ascii",
  "chacha20 0.9.1",
  "cipher 0.5.2",
  "ctr",
- "digest 0.11.3",
+ "digest",
  "ecdsa",
  "ed25519-dalek",
  "getrandom 0.4.3",
  "heapless",
- "hmac 0.13.0",
+ "hmac",
  "log",
  "ml-kem",
  "p256",
@@ -4004,9 +3973,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunset-client"
+version = "0.1.0"
+source = "git+https://github.com/navigato-rs/sunset?rev=7b2b713#7b2b7137ce33c4d080d507e3d7f19b1e1cc895f3"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "hmac",
+ "polling",
+ "sha1",
+ "signature",
+ "ssh-key",
+ "sunset",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
+
+[[package]]
 name = "sunset-sftp"
 version = "0.2.0"
-source = "git+https://github.com/navigato-rs/sunset?rev=09708ad#09708add6c803d8f5a679a8050d52e1e1c11980e"
+source = "git+https://github.com/navigato-rs/sunset?rev=7b2b713#7b2b7137ce33c4d080d507e3d7f19b1e1cc895f3"
 dependencies = [
  "log",
  "num_enum",
@@ -4018,7 +4004,7 @@ dependencies = [
 [[package]]
 name = "sunset-sshwire-derive"
 version = "0.3.0"
-source = "git+https://github.com/navigato-rs/sunset?rev=09708ad#09708add6c803d8f5a679a8050d52e1e1c11980e"
+source = "git+https://github.com/navigato-rs/sunset?rev=7b2b713#7b2b7137ce33c4d080d507e3d7f19b1e1cc895f3"
 dependencies = [
  "virtue",
 ]

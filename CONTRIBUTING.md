@@ -22,9 +22,7 @@ Ensure `cargo fmt` is ran and `cargo clippy` is clean.
 - `src/input.rs` — keyboard handling
 - `src/ui/` — UI components (panel, preview, help)
 - `src/image_decode.rs` — image decoding (including animated GIF)
-- `src/ssh.rs` — SSH transport: blocking session driving sunset's sans-io runners
-- `src/ssh/knownhosts.rs` — `known_hosts` parsing and host-key policy
-- `src/ssh/agent.rs` — blocking ssh-agent client (Unix only)
+- `src/ssh.rs` — SSH transport: sunset-client for connect/ProxyJump, SFTP on that channel
 - `src/sftp.rs` — remote file operations built on `src/ssh.rs`
 - `src/replay.rs` — replay case data structures and assertion types
 - `src/replay_runner.rs` — headless replay executor and assertion logic
@@ -173,52 +171,23 @@ sort settings. Inspect it to determine the right assertion values for a new test
 
 ## SSH
 
-Remote browsing runs on [sunset](https://github.com/navigato-rs/sunset), a
-pure-Rust SSH implementation. Both layers used here are sans-io: `sunset::Runner`
-is the SSH protocol and `SftpRunner` is SFTP on top of it, and neither does IO
-of its own, so `src/ssh.rs` drives them straight from a blocking socket. There
-is no executor and no background thread — an `ssh::Conn` is a `Mutex` around
-the session, and whichever worker thread calls in does the pumping itself.
-That is why nothing in the dependency tree is async.
-
-Four properties of the runners shape that loop, and every one of them causes a
-hang rather than an error when ignored:
-
-- An event borrows the runner, so anything needing the runner again has to wait
-  until that borrow ends.
-- The SSH runner stops accepting socket input while a payload is waiting to be
-  collected, so `Session::feed` returns instead of looping: only the caller can
-  drain a channel, and spinning there would never let it.
-- Channel data has to be moved out by hand. Nothing else will do it, and the
-  peer stops sending once the window it gave us goes unacknowledged.
-- `SftpRunner::want_buf` asks for exactly the bytes it wants next, so it is
-  filled from the channel rather than read past.
+Remote browsing runs on [sunset](https://github.com/navigato-rs/sunset).
+`sunset-client` loads `~/.ssh/config` (including ProxyJump), verifies host keys,
+and authenticates. FileMan then drives `SftpRunner` on that session's channel.
+Exec (search, tar) opens a separate connection so a long command cannot stall
+the listing. There is no executor.
 
 Reads and writes are sized by `MAX_READ_LEN` and `MAX_WRITE_LEN`. The runner
 refuses anything longer, since a bigger SFTP packet than servers are required
 to accept gets the channel closed rather than answered.
 
 A command reading its input to end-of-file needs to be told when that is, which
-`ExecStream::finish_input` does via sunset's `send_eof`. Without it `tar xf -`
-waits forever, so a streamed upload that hangs is usually a missing
-`finish_input`.
+`ExecStream::finish_input` does via the client's `send_eof`. Without it
+`tar xf -` waits forever.
 
-A command's exit status arrives as a channel request around the channel's EOF,
-so `Exec::done` waits for the close as well: stopping at EOF alone races the
-status and usually misses it. `check_exec` then judges by that status, and
-falls back to stderr only when a server sends none — going by stderr alone
-fails a copy over any warning the command prints while still succeeding.
-
-A command's output is held to a high-water mark and the rest left on the
-channel, so the peer's window throttles it. Discarding the excess instead is
-what a fixed cap did, and it corrupted any directory copy whose tar ran past
-it. A capture that nothing drains until the command ends is still bounded, but
-fails rather than returning a short answer.
-
-Authentication offers ssh-agent keys first and then key files. `sunset::agent`
-is the agent protocol and `src/ssh/agent.rs` is the transport under it — a Unix
-socket, or the OpenSSH named pipe on Windows, which is the only part that
-differs.
+`check_exec` judges by the command's exit status, and by stderr only when the
+server sends none — going by stderr alone fails a copy over any warning the
+command prints while still succeeding.
 
 A connection dropped by a sleep or a network change is only discovered when
 something is next asked of it. `Conn::with_retry` dials again and repeats the

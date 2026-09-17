@@ -12,8 +12,7 @@ use crate::core::{DirEntry, EntryLocation};
 use crate::ssh::{self, Conn, FileAttrs, OpenMode, RemoteFile};
 
 pub struct SftpSession {
-    /// The connection. Named `sftp` because that is what the app does with it;
-    /// exec-based operations share the same connection.
+    /// The SFTP connection. Exec (search, tar) opens its own SSH session.
     pub sftp: Arc<Conn>,
     pub host: String,
     /// Remote user's home directory (from `realpath(".")`), if resolved.
@@ -61,96 +60,6 @@ pub fn decode_archive_path(path: &Path) -> Option<(String, String)> {
     Some((host, remote))
 }
 
-pub struct SshHostConfig {
-    pub hostname: Option<String>,
-    pub user: Option<String>,
-    pub port: Option<u16>,
-    pub identity_files: Vec<String>,
-}
-
-/// Parse `~/.ssh/config` for Host/Hostname/User/Port/IdentityFile.
-pub fn parse_ssh_config(content: &str) -> HashMap<String, SshHostConfig> {
-    let mut hosts: HashMap<String, SshHostConfig> = HashMap::new();
-    let mut current_hosts: Vec<String> = Vec::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        // Split on first whitespace or '='
-        let (key, value) = if let Some(eq) = trimmed.find('=') {
-            let (k, v) = trimmed.split_at(eq);
-            (k.trim(), v[1..].trim())
-        } else if let Some(sp) = trimmed.find(char::is_whitespace) {
-            let (k, v) = trimmed.split_at(sp);
-            (k.trim(), v.trim())
-        } else {
-            continue;
-        };
-
-        match key.to_ascii_lowercase().as_str() {
-            "host" => {
-                current_hosts.clear();
-                for h in value.split_whitespace() {
-                    if h.contains('*') || h.contains('?') {
-                        continue;
-                    }
-                    current_hosts.push(h.to_string());
-                    hosts.entry(h.to_string()).or_insert_with(|| SshHostConfig {
-                        hostname: None,
-                        user: None,
-                        port: None,
-                        identity_files: Vec::new(),
-                    });
-                }
-            }
-            "hostname" => {
-                for h in &current_hosts {
-                    if let Some(cfg) = hosts.get_mut(h) {
-                        cfg.hostname = Some(value.to_string());
-                    }
-                }
-            }
-            "user" => {
-                for h in &current_hosts {
-                    if let Some(cfg) = hosts.get_mut(h) {
-                        cfg.user = Some(value.to_string());
-                    }
-                }
-            }
-            "port" => {
-                if let Ok(port) = value.parse::<u16>() {
-                    for h in &current_hosts {
-                        if let Some(cfg) = hosts.get_mut(h) {
-                            cfg.port = Some(port);
-                        }
-                    }
-                }
-            }
-            "identityfile" => {
-                let expanded = expand_tilde(value);
-                for h in &current_hosts {
-                    if let Some(cfg) = hosts.get_mut(h) {
-                        cfg.identity_files.push(expanded.clone());
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    hosts
-}
-
-fn expand_tilde(path: &str) -> String {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return format!("{}/{rest}", home.display());
-        }
-    }
-    path.to_string()
-}
-
 pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     #[cfg(windows)]
     {
@@ -165,46 +74,20 @@ pub(crate) fn home_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-/// Connect to an SSH host using config resolution. Offers ssh-agent keys first,
-/// then key files from the config and the default locations.
-pub fn connect(
-    host: &str,
-    ssh_config: &HashMap<String, SshHostConfig>,
-) -> Result<SftpSession, String> {
-    let config = ssh_config.get(host);
-    let hostname = config
-        .and_then(|c| c.hostname.as_deref())
-        .unwrap_or(host)
-        .to_string();
-    let user = config
-        .and_then(|c| c.user.as_deref())
-        .map(|s| s.to_string())
-        .or_else(|| std::env::var("USER").ok())
-        .unwrap_or_else(|| "root".to_string());
-    let port = config.and_then(|c| c.port).unwrap_or(22);
+fn fallback_user() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "root".to_string())
+}
 
-    let mut identity_files: Vec<String> =
-        config.map(|c| c.identity_files.clone()).unwrap_or_default();
-    if let Some(home) = home_dir() {
-        for default in &["id_ed25519", "id_rsa", "id_ecdsa"] {
-            let path = home.join(".ssh").join(default);
-            let path = path.to_string_lossy().into_owned();
-            if !identity_files.contains(&path) {
-                identity_files.push(path);
-            }
-        }
-    }
-    identity_files.retain(|p| Path::new(p).exists());
-
-    let conn = ssh::connect(ssh::ConnectParams {
-        host: host.to_string(),
-        hostname,
-        port,
-        user,
-        identity_files,
-        use_agent: true,
-    })
-    .map_err(|e| e.message)?;
+/// Connect using `~/.ssh/config` (ProxyJump, identities, host keys).
+pub fn connect(host: &str) -> Result<SftpSession, String> {
+    let home = home_dir().ok_or_else(|| "HOME is not set".to_string())?;
+    let config = sunset_client::config::Config::load(&home).map_err(|e| e.to_string())?;
+    let options = config
+        .connection(host, &fallback_user(), ssh::connect_timeout())
+        .map_err(|e| e.to_string())?;
+    let conn = ssh::connect(host, options).map_err(|e| e.message)?;
 
     let home_dir = conn.home_dir.clone();
     Ok(SftpSession {
@@ -578,11 +461,8 @@ pub fn copy_remote_dir_to_local_via_tar(
     Ok(())
 }
 
-/// Runs a command that should print nothing, treating any stderr as failure.
-///
-/// sunset surfaces a channel's exit status as a session-wide event that cannot
-/// be tied back to one channel, so unlike the libssh2 version this reads the
-/// command's stderr rather than its exit code.
+/// Runs a command that should print nothing, treating a non-zero status as
+/// failure (and stderr when the server sends no status).
 fn exec_checked(conn: &Conn, cmd: &str, what: &str) -> Result<(), String> {
     let out = conn.exec(cmd).map_err(|e| format!("{what}: {e}"))?;
     check_exec(&out, what)
@@ -1014,40 +894,13 @@ fn parent_remote_path(path: &str) -> String {
     }
 }
 
-/// Parse SSH hosts from ~/.ssh/config (cross-platform).
+/// Literal `Host` names from `~/.ssh/config`.
 pub fn discover_ssh_hosts() -> Vec<String> {
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => return Vec::new(),
+    let Some(home) = home_dir() else {
+        return Vec::new();
     };
-    let config_path = std::path::Path::new(&home).join(".ssh/config");
-    let content = match std::fs::read_to_string(&config_path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    let mut hosts = Vec::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(rest) = trimmed.strip_prefix("Host ") {
-            for host in rest.split_whitespace() {
-                if !host.contains('*') && !host.contains('?') {
-                    hosts.push(host.to_string());
-                }
-            }
-        }
-    }
-    hosts
-}
-
-/// Load and parse the SSH config file once.
-pub fn load_ssh_config() -> HashMap<String, SshHostConfig> {
-    let home = match std::env::var("HOME") {
-        Ok(h) => h,
-        Err(_) => return HashMap::new(),
-    };
-    let config_path = std::path::Path::new(&home).join(".ssh/config");
-    match std::fs::read_to_string(&config_path) {
-        Ok(content) => parse_ssh_config(&content),
-        Err(_) => HashMap::new(),
+    match sunset_client::config::Config::load(&home) {
+        Ok(config) => config.aliases().to_vec(),
+        Err(_) => Vec::new(),
     }
 }

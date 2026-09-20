@@ -78,7 +78,7 @@ jobs:
           # Verify connectivity
           ssh -o BatchMode=yes localhost echo "SSH OK"
       - name: Run SFTP tests
-        run: cargo test --test sftp_localhost -- --ignored
+        run: cargo test --test sftp_localhost -- --ignored --test-threads=1
 
   replay:
     runs-on: ubuntu-latest

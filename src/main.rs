@@ -118,8 +118,8 @@ impl UiCache {
         // Keyboard moves the cursor before this runs; a mouse click does it
         // during draw. Recentering after a click pulls the row out from under
         // the pointer, so a double-click opens a different file (#89).
-        let keyboard_moved = left_selected != self.pre_keyboard_left
-            || right_selected != self.pre_keyboard_right;
+        let keyboard_moved =
+            left_selected != self.pre_keyboard_left || right_selected != self.pre_keyboard_right;
         self.scroll_mode = if dir_changed || keyboard_moved {
             ScrollMode::ForceActive
         } else {

@@ -59,8 +59,8 @@ encoding_rs = "0.8"
 chardetng = "0.1"
 # Without the `async` feature this is the SFTP protocol on its own, which is
 # what a blocking transport wants; it pulls in no executor.
-sunset-sftp = { git = "https://github.com/navigato-rs/sunset", rev = "371ab93", default-features = false }
-sunset-client = { git = "https://github.com/navigato-rs/sunset", rev = "371ab93" }
+sunset-sftp = { git = "https://github.com/navigato-rs/sunset", rev = "8d411b2", default-features = false }
+sunset-client = { git = "https://github.com/navigato-rs/sunset", rev = "8d411b2" }
 dds = "0.2.0"
 
 [target.'cfg(unix)'.dependencies]

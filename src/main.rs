@@ -49,6 +49,10 @@ struct UiCache {
     last_active_panel: core::ActivePanel,
     last_left_dir_token: u64,
     last_right_dir_token: u64,
+    /// Selection index before `handle_keyboard` this frame. Keyboard moves
+    /// the cursor before scroll mode is decided; mouse clicks do it after.
+    pre_keyboard_left: usize,
+    pre_keyboard_right: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -98,19 +102,25 @@ fn wake_channel<T>(
 }
 
 impl UiCache {
+    fn snapshot_selection(&mut self, app: &app_state::AppState) {
+        self.pre_keyboard_left = app.left_panel.browser().selected_index;
+        self.pre_keyboard_right = app.right_panel.browser().selected_index;
+    }
+
     fn update_scroll_mode(&mut self, app: &app_state::AppState) {
         let left_selected = app.left_panel.browser().selected_index;
         let right_selected = app.right_panel.browser().selected_index;
         let active = app.active_panel;
         let left_dir = app.left_panel.browser().dir_token;
         let right_dir = app.right_panel.browser().dir_token;
-        // Don't trigger ForceActive on Tab alone — ensure_visible handles
-        // bringing the selection into view without unnecessary re-centering.
-        let selection_changed = left_selected != self.last_left_selected
-            || right_selected != self.last_right_selected
-            || left_dir != self.last_left_dir_token
-            || right_dir != self.last_right_dir_token;
-        self.scroll_mode = if selection_changed {
+        let dir_changed =
+            left_dir != self.last_left_dir_token || right_dir != self.last_right_dir_token;
+        // Keyboard moves the cursor before this runs; a mouse click does it
+        // during draw. Recentering after a click pulls the row out from under
+        // the pointer, so a double-click opens a different file (#89).
+        let keyboard_moved = left_selected != self.pre_keyboard_left
+            || right_selected != self.pre_keyboard_right;
+        self.scroll_mode = if dir_changed || keyboard_moved {
             ScrollMode::ForceActive
         } else {
             ScrollMode::Default
@@ -4137,6 +4147,8 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             last_active_panel: core::ActivePanel::Left,
             last_left_dir_token: 0,
             last_right_dir_token: 0,
+            pre_keyboard_left: 0,
+            pre_keyboard_right: 0,
         };
         let image_cache = ImageCache {
             textures: HashMap::new(),
@@ -4290,6 +4302,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     ctx.input_mut(|i| i.events.extend(key_events.iter().cloned()));
                     apply_theme(&ctx, &runtime.app.theme.colors());
                     let input = ctx.input(|i| i.clone());
+                    runtime.ui_cache.snapshot_selection(&runtime.app);
                     input::handle_keyboard(&ctx, &input, &mut runtime.app, &mut runtime.ui_cache);
                     runtime.ui_cache.update_scroll_mode(&runtime.app);
 

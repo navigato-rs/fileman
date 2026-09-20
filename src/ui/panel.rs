@@ -1186,10 +1186,10 @@ pub fn draw_panel(
 
 /// Where the list should be scrolled to, or `None` to leave it where it is.
 ///
-/// Only a selection or directory change moves the view. Scrolling with the
-/// wheel leaves the selection behind, and pulling it back into sight then
-/// would fight the wheel: every notch up was undone on the next frame, so the
-/// list bounced and never reached the top.
+/// Keyboard selection and directory changes recenter (`ForceActive`). A mouse
+/// click does not: the row is already under the pointer, and moving it would
+/// make a double-click land on a different file. Wheel scrolling is also left
+/// alone, or every notch up was undone on the next frame.
 fn list_scroll_target(
     mode: ScrollMode,
     selected_index: usize,

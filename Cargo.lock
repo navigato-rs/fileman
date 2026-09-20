@@ -1291,7 +1291,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3370,7 +3370,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3944,7 +3944,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "sunset"
 version = "0.6.0"
-source = "git+https://github.com/navigato-rs/sunset?rev=371ab93#371ab935449aa60dc0393485f4fbcf2f2659f65b"
+source = "git+https://github.com/navigato-rs/sunset?rev=8d411b2#8d411b2e2efd1a15d04c5bf3ac271be73e46193a"
 dependencies = [
  "aes",
  "ascii",
@@ -3975,7 +3975,7 @@ dependencies = [
 [[package]]
 name = "sunset-client"
 version = "0.1.0"
-source = "git+https://github.com/navigato-rs/sunset?rev=371ab93#371ab935449aa60dc0393485f4fbcf2f2659f65b"
+source = "git+https://github.com/navigato-rs/sunset?rev=8d411b2#8d411b2e2efd1a15d04c5bf3ac271be73e46193a"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3992,7 +3992,7 @@ dependencies = [
 [[package]]
 name = "sunset-sftp"
 version = "0.2.0"
-source = "git+https://github.com/navigato-rs/sunset?rev=371ab93#371ab935449aa60dc0393485f4fbcf2f2659f65b"
+source = "git+https://github.com/navigato-rs/sunset?rev=8d411b2#8d411b2e2efd1a15d04c5bf3ac271be73e46193a"
 dependencies = [
  "log",
  "num_enum",
@@ -4004,7 +4004,7 @@ dependencies = [
 [[package]]
 name = "sunset-sshwire-derive"
 version = "0.3.0"
-source = "git+https://github.com/navigato-rs/sunset?rev=371ab93#371ab935449aa60dc0393485f4fbcf2f2659f65b"
+source = "git+https://github.com/navigato-rs/sunset?rev=8d411b2#8d411b2e2efd1a15d04c5bf3ac271be73e46193a"
 dependencies = [
  "virtue",
 ]
@@ -4781,7 +4781,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -527,6 +527,8 @@ pub(crate) fn run_replay(case_path: &PathBuf, snapshot: Option<PathBuf>) -> anyh
         last_active_panel: core::ActivePanel::Left,
         last_left_dir_token: 0,
         last_right_dir_token: 0,
+        pre_keyboard_left: 0,
+        pre_keyboard_right: 0,
     };
     let mut headless = HeadlessUi::new();
 
@@ -615,6 +617,7 @@ impl HeadlessUi {
         let _ = self.egui_ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx();
             let input = ctx.input(|i| i.clone());
+            ui_cache.snapshot_selection(app);
             input::handle_keyboard(ctx, &input, app, ui_cache);
             draw_root_ui(UiRender {
                 ui,
@@ -1004,6 +1007,8 @@ pub(crate) fn run_snapshot(path: &PathBuf) -> anyhow::Result<()> {
         last_active_panel: core::ActivePanel::Left,
         last_left_dir_token: 0,
         last_right_dir_token: 0,
+        pre_keyboard_left: 0,
+        pre_keyboard_right: 0,
     };
     let cur_dir = std::env::current_dir()?;
     load_fs_directory_async(&mut app, cur_dir.clone(), core::ActivePanel::Left, None);
@@ -1136,6 +1141,8 @@ mod fuzz {
                 last_active_panel: core::ActivePanel::Left,
                 last_left_dir_token: 0,
                 last_right_dir_token: 0,
+                pre_keyboard_left: 0,
+                pre_keyboard_right: 0,
             };
             let mut headless = HeadlessUi::new();
             load_fs_directory_async(&mut app, tmp.clone(), core::ActivePanel::Left, None);

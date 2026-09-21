@@ -449,12 +449,12 @@ fn open_selected_from_to(
     };
     let container_root = app.panel(source).browser().container_root.clone();
 
-    app.store_selection_memory_for(source);
     app.push_history(target);
 
     match selected_entry.location.clone() {
         core::EntryLocation::Fs(path) => {
             if selected_entry.is_dir {
+                // Going up: land on the folder we left. Going in: start fresh.
                 let prefer_name = if selected_entry.name == ".." {
                     current_path
                         .file_name()
@@ -463,12 +463,6 @@ fn open_selected_from_to(
                     None
                 };
                 load_fs_directory_async(app, path.clone(), target, prefer_name);
-
-                if selected_entry.name != ".."
-                    && let Some(name) = app.fs_last_selected_name.get(&path).cloned()
-                {
-                    app.select_entry_by_name(target, &name);
-                }
             } else if let Some(kind) = core::container_kind_from_path(&path) {
                 load_container_directory_async(
                     app,
@@ -520,15 +514,6 @@ fn open_selected_from_to(
                     ContainerLoadMode::UseCache,
                     None,
                 );
-
-                if selected_entry.name != ".."
-                    && let Some(name) = app
-                        .container_last_selected_name
-                        .get(&(archive_path.clone(), inner_path.clone(), kind))
-                        .cloned()
-                {
-                    app.select_entry_by_name(target, &name);
-                }
             }
         }
         core::EntryLocation::Remote { host, path } => {

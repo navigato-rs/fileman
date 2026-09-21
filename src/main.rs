@@ -1773,8 +1773,8 @@ fn load_sftp_directory_async(
                     };
                     browser.current_path = synthetic;
                     browser.entries = cached.entries;
-                    browser.selected_index = cached.selected_index;
-                    browser.top_index = cached.top_index;
+                    browser.selected_index = 0;
+                    browser.top_index = 0;
                     browser.dir_token = browser.dir_token.wrapping_add(1);
                     browser.container_root = None;
                     browser.watching_archive = None;
@@ -1986,8 +1986,8 @@ fn load_fs_directory_async(
                     browser.current_path = path;
                     browser.browser_mode = core::BrowserMode::Fs;
                     browser.entries = cached.entries;
-                    browser.selected_index = cached.selected_index;
-                    browser.top_index = cached.top_index;
+                    browser.selected_index = 0;
+                    browser.top_index = 0;
                     browser.inline_rename = None;
                     browser.dir_token = browser.dir_token.wrapping_add(1);
                     browser.load = cached.load;
@@ -2235,9 +2235,7 @@ fn load_fs_directory_async(
         });
     }
 
-    let remembered = prefer_name
-        .clone()
-        .or_else(|| app.fs_last_selected_name.get(&path).cloned());
+    let remembered = prefer_name.clone();
     let panel_state = app.panel_mut(target_panel);
     let browser = panel_state.browser_mut();
     let initial_loading = initial.is_empty() || has_parent_entry;
@@ -2461,9 +2459,6 @@ fn load_container_directory_async(
     } else {
         Vec::new()
     };
-    let cached_selection = cached
-        .as_ref()
-        .map(|cache| (cache.selected_index, cache.top_index));
     if initial.is_empty() {
         if !cwd.is_empty() {
             let mut parent = cwd
@@ -2799,11 +2794,7 @@ fn load_container_directory_async(
         });
     }
 
-    let remembered = prefer_name.clone().or_else(|| {
-        app.container_last_selected_name
-            .get(&(archive_path.clone(), cwd.clone(), kind))
-            .cloned()
-    });
+    let remembered = prefer_name.clone();
 
     // Get current index entry count for index_last_seen
     let index_entry_count = if used_index || watching {
@@ -2842,12 +2833,13 @@ fn load_container_directory_async(
     };
     browser.container_root = root_hint;
     browser.entries = initial;
-    if let Some((selected_index, top_index)) = cached_selection {
-        browser.selected_index = selected_index.min(browser.entries.len().saturating_sub(1));
-        browser.top_index = top_index.min(browser.selected_index);
-    } else {
-        browser.selected_index = 0;
-        browser.top_index = 0;
+    browser.selected_index = 0;
+    browser.top_index = 0;
+    if let Some(ref name) = remembered
+        && let Some(idx) = browser.entries.iter().position(|e| e.name == *name)
+    {
+        browser.selected_index = idx;
+        browser.top_index = idx.saturating_sub(5);
     }
     browser.inline_rename = None;
     browser.dir_token = browser.dir_token.wrapping_add(1);

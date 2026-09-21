@@ -1063,14 +1063,6 @@ impl AppState {
         self.container_dir_cache.insert(key, cache);
     }
 
-    pub fn select_entry_by_name(&mut self, which: ActivePanel, name: &str) {
-        let panel = self.panel_mut(which);
-        let browser = panel.browser_mut();
-        if let Some(idx) = browser.entries.iter().position(|e| e.name == name) {
-            browser.selected_index = idx;
-        }
-    }
-
     pub fn push_history(&mut self, which: ActivePanel) {
         let snapshot = {
             let panel = self.panel(which);

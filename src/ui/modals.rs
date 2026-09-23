@@ -38,14 +38,47 @@ pub fn draw_confirmation(ctx: &egui::Context, app: &mut app_state::AppState) {
     let collisions = &app.pending_collisions;
     let overwrite = !collisions.is_empty();
 
+    // CENTER_TOP so extra collision lines grow the window downward and the
+    // name field keeps its screen position (CENTER_CENTER would re-home it).
     egui::Window::new(title)
+        .id(egui::Id::new("pending_op_confirm"))
         .order(egui::Order::Foreground)
         .collapsible(false)
         .resizable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .pivot(egui::Align2::CENTER_TOP)
+        .default_pos(egui::pos2(
+            screen.center().x,
+            (screen.center().y - 80.0).max(screen.top() + 24.0),
+        ))
         .show(ctx, |ui| {
             ui.add_space(4.0);
             ui.colored_label(color32(colors.row_fg_active), body);
+            if has_name_field {
+                ui.add_space(8.0);
+                let mut name = app.rename_input.clone().unwrap_or_default();
+                let hint = if matches!(
+                    op,
+                    app_state::PendingOp::Copy { .. } | app_state::PendingOp::Move { .. }
+                ) {
+                    "{1} is that part of the original name"
+                } else {
+                    "New name"
+                };
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut name)
+                        .id(egui::Id::new("pending_op_name"))
+                        .desired_width(280.0)
+                        .hint_text(hint),
+                );
+                if app.rename_focus {
+                    response.request_focus();
+                    app.rename_focus = false;
+                }
+                app.rename_input = Some(name);
+                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    confirmed = true;
+                }
+            }
             if overwrite {
                 ui.add_space(8.0);
                 let warn = egui::Color32::from_rgb(230, 170, 70);
@@ -66,29 +99,6 @@ pub fn draw_confirmation(ctx: &egui::Context, app: &mut app_state::AppState) {
                 }
             }
             if has_name_field {
-                ui.add_space(8.0);
-                let mut name = app.rename_input.clone().unwrap_or_default();
-                let hint = if matches!(
-                    op,
-                    app_state::PendingOp::Copy { .. } | app_state::PendingOp::Move { .. }
-                ) {
-                    "{1} is that part of the original name"
-                } else {
-                    "New name"
-                };
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut name)
-                        .desired_width(280.0)
-                        .hint_text(hint),
-                );
-                if app.rename_focus {
-                    response.request_focus();
-                    app.rename_focus = false;
-                }
-                app.rename_input = Some(name);
-                if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    confirmed = true;
-                }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     let ok_label = if overwrite

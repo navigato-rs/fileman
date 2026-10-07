@@ -1279,6 +1279,85 @@ fn append_path_to_tar<W: Write>(builder: &mut tar::Builder<W>, path: &Path) -> i
     Ok(())
 }
 
+/// Write a `tar` byte stream to `archive_path`.
+///
+/// Zip is rebuilt from an uncompressed tar, so the extension matches the
+/// bytes. Tar, tar.gz, and tar.bz2 are already the finished archive.
+/// An existing path is left untouched. A failed write removes the partial file.
+pub fn pack_from_tar_stream<R: Read>(
+    stream: R,
+    archive_path: &Path,
+    kind: ContainerKind,
+) -> io::Result<()> {
+    if archive_path.symlink_metadata().is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("{} already exists", archive_path.display()),
+        ));
+    }
+    let written = match kind {
+        ContainerKind::Zip => zip_from_tar(stream, archive_path),
+        ContainerKind::Tar | ContainerKind::TarGz | ContainerKind::TarBz2 => {
+            copy_stream_to_file(stream, archive_path)
+        }
+    };
+    if written.is_err() {
+        let _ = fs::remove_file(archive_path);
+    }
+    written
+}
+
+fn copy_stream_to_file<R: Read>(mut stream: R, archive_path: &Path) -> io::Result<()> {
+    let mut file = fs::File::create(archive_path)?;
+    io::copy(&mut stream, &mut file)?;
+    Ok(())
+}
+
+fn zip_from_tar<R: Read>(reader: R, archive_path: &Path) -> io::Result<()> {
+    let file = fs::File::create(archive_path)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+    let mut archive = tar::Archive::new(reader);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let name = {
+            let raw = entry.path()?;
+            let Some(name) = zip_entry_name(raw.as_ref()) else {
+                continue;
+            };
+            name
+        };
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_dir() {
+            zip.add_directory(format!("{name}/"), options)
+                .map_err(io::Error::other)?;
+        } else if entry_type.is_file() {
+            zip.start_file(name, options).map_err(io::Error::other)?;
+            io::copy(&mut entry, &mut zip)?;
+        }
+    }
+    zip.finish().map_err(io::Error::other)?;
+    Ok(())
+}
+
+/// Archive member name using `/`. `..` and absolute paths are refused.
+fn zip_entry_name(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for comp in path.components() {
+        match comp {
+            path::Component::Normal(part) => parts.push(part.to_str()?.to_string()),
+            path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
+}
+
 impl ContainerPlugin for TarBz2Plugin {
     fn kind(&self) -> ContainerKind {
         ContainerKind::TarBz2
@@ -1361,5 +1440,138 @@ mod traversal_tests {
         assert_eq!(normalize_archive_path(Path::new("../../x")), "x");
         assert_eq!(normalize_archive_path(Path::new("a/./b")), "a/b");
         assert_eq!(normalize_archive_path(Path::new("dir/sub/f")), "dir/sub/f");
+    }
+}
+
+#[cfg(test)]
+mod pack_stream_tests {
+    use super::{ContainerKind, pack_from_tar_stream};
+    use std::{fs, io, path::PathBuf};
+
+    struct TmpDir(PathBuf);
+    impl TmpDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("fileman-pack-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir(&path).unwrap();
+            TmpDir(path)
+        }
+    }
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    struct FailRead;
+    impl io::Read for FailRead {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("boom"))
+        }
+    }
+
+    fn raw_entry(name: &str, body: &[u8]) -> Vec<u8> {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(body.len() as u64);
+        let bytes = name.as_bytes();
+        header.as_mut_bytes()[..bytes.len()].copy_from_slice(bytes);
+        header.set_cksum();
+        let mut out = header.as_bytes().to_vec();
+        out.extend_from_slice(body);
+        let pad = (512 - (body.len() % 512)) % 512;
+        out.extend(std::iter::repeat_n(0u8, pad));
+        out
+    }
+
+    fn sample_tar() -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut note = tar::Header::new_gnu();
+        note.set_entry_type(tar::EntryType::Regular);
+        note.set_mode(0o644);
+        note.set_size(5);
+        builder
+            .append_data(&mut note, "note.txt", &b"hello"[..])
+            .unwrap();
+        let mut dir = tar::Header::new_gnu();
+        dir.set_entry_type(tar::EntryType::Directory);
+        dir.set_mode(0o755);
+        dir.set_size(0);
+        builder.append_data(&mut dir, "sub", io::empty()).unwrap();
+        let mut inner = tar::Header::new_gnu();
+        inner.set_entry_type(tar::EntryType::Regular);
+        inner.set_mode(0o644);
+        inner.set_size(6);
+        builder
+            .append_data(&mut inner, "sub/inner.txt", &b"nested"[..])
+            .unwrap();
+        let mut link = tar::Header::new_gnu();
+        link.set_entry_type(tar::EntryType::Symlink);
+        link.set_size(0);
+        link.set_link_name("note.txt").unwrap();
+        builder.append_data(&mut link, "link", io::empty()).unwrap();
+        let mut bytes = builder.into_inner().unwrap();
+        let end = bytes.split_off(bytes.len() - 1024);
+        bytes.extend(raw_entry("../escape.txt", b"nope"));
+        bytes.extend(raw_entry("/tmp/abs.txt", b"nope"));
+        bytes.extend(end);
+        bytes
+    }
+
+    #[test]
+    fn tar_stream_becomes_a_zip_and_a_raw_tar_is_copied() {
+        let dir = TmpDir::new();
+        let tar_bytes = sample_tar();
+        let zip_path = dir.0.join("out.zip");
+        pack_from_tar_stream(
+            io::Cursor::new(tar_bytes.clone()),
+            &zip_path,
+            ContainerKind::Zip,
+        )
+        .unwrap();
+        let file = fs::File::open(&zip_path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.iter().any(|name| name == "note.txt"));
+        assert!(names.iter().any(|name| name == "sub/"));
+        assert!(names.iter().any(|name| name == "sub/inner.txt"));
+        assert!(names.iter().all(|name| !name.contains("escape")));
+        assert!(names.iter().all(|name| !name.contains("abs")));
+        assert!(names.iter().all(|name| name != "link"));
+        let mut note = zip.by_name("note.txt").unwrap();
+        let mut body = Vec::new();
+        io::copy(&mut note, &mut body).unwrap();
+        assert_eq!(body, b"hello");
+        drop(note);
+        let mut inner = zip.by_name("sub/inner.txt").unwrap();
+        body.clear();
+        io::copy(&mut inner, &mut body).unwrap();
+        assert_eq!(body, b"nested");
+
+        let again = pack_from_tar_stream(
+            io::Cursor::new(tar_bytes.clone()),
+            &zip_path,
+            ContainerKind::Zip,
+        )
+        .unwrap_err();
+        assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
+        assert!(zip_path.symlink_metadata().is_ok());
+
+        let tar_path = dir.0.join("out.tar");
+        pack_from_tar_stream(
+            io::Cursor::new(tar_bytes.clone()),
+            &tar_path,
+            ContainerKind::Tar,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&tar_path).unwrap(), tar_bytes);
+
+        let partial = dir.0.join("partial.zip");
+        let err = pack_from_tar_stream(FailRead, &partial, ContainerKind::Zip).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(partial.symlink_metadata().is_err());
     }
 }

@@ -368,10 +368,7 @@ fn pending_op_text(op: &app_state::PendingOp) -> (&'static str, String) {
             let body = if sources.len() == 1 {
                 format!(
                     "Pack \"{}\" into archive\n(in {}):",
-                    sources[0]
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("<unknown>"),
+                    sources[0].file_name(),
                     dst_dir.to_string_lossy()
                 )
             } else {

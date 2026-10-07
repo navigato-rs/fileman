@@ -420,6 +420,35 @@ pub fn start_io_worker(
                         io_result = IOResult::Error(msg);
                     }
                 }
+                IOTask::PackRemoteToLocal {
+                    host,
+                    paths,
+                    archive_path,
+                    kind,
+                } => {
+                    let result = lock_or_recover(&sftp_sessions)
+                        .get(&host)
+                        .cloned()
+                        .ok_or_else(|| format!("No SFTP session for host: {host}"))
+                        .and_then(|session| {
+                            let locked = lock_or_recover(&session);
+                            crate::sftp::pack_remote_to_local(
+                                &locked.sftp,
+                                &paths,
+                                &archive_path,
+                                kind,
+                                &cancel_flag,
+                                Some(&transfer_progress),
+                            )
+                        });
+                    if let Err(e) = result
+                        && e != "Cancelled"
+                    {
+                        let msg = format!("Pack error: {e}");
+                        eprintln!("{msg}");
+                        io_result = IOResult::Error(msg);
+                    }
+                }
                 #[cfg(unix)]
                 IOTask::SetProps {
                     path,

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{self, Read, Write},
     path::Path,
     sync::{
@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use crate::archive::ContainerKind;
 use crate::core::{DirEntry, EntryLocation};
 use crate::ssh::{self, Conn, FileAttrs, OpenMode, RemoteFile};
 
@@ -461,6 +462,127 @@ pub fn copy_remote_dir_to_local_via_tar(
     Ok(())
 }
 
+/// `tar` command that streams `paths` to stdout.
+///
+/// Each member is `./name` under its own parent, so a file called `-rf` is
+/// not read as a flag and two directories can be packed together. Zip asks
+/// tar to follow symlinks (`h`): a zip has no symlink entries, and a local
+/// pack follows links.
+fn remote_pack_command(paths: &[String], kind: ContainerKind) -> Result<String, String> {
+    if paths.is_empty() {
+        return Err("nothing to pack".to_string());
+    }
+    let flags = match kind {
+        ContainerKind::Zip => "chf -",
+        ContainerKind::Tar => "cf -",
+        ContainerKind::TarGz => "czf -",
+        ContainerKind::TarBz2 => "cjf -",
+    };
+    let mut members = Vec::with_capacity(paths.len());
+    let mut names = HashSet::new();
+    for path in paths {
+        let (parent, name) = split_remote(path);
+        if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+            return Err(format!("cannot pack {path}"));
+        }
+        if !names.insert(name) {
+            return Err(format!("two items are named {name}"));
+        }
+        members.push(format!(
+            "-C {} {}",
+            sh_quote(parent),
+            sh_quote(&format!("./{name}"))
+        ));
+    }
+    Ok(format!("tar {flags} {}", members.join(" ")))
+}
+
+/// Stream a remote `tar` of `paths` into a local archive.
+///
+/// Refuses an existing destination. A failed or cancelled write deletes the
+/// partial file so the next attempt is not blocked by it.
+pub fn pack_remote_to_local(
+    conn: &Arc<Conn>,
+    paths: &[String],
+    archive_path: &Path,
+    kind: ContainerKind,
+    cancel: &Arc<AtomicBool>,
+    progress: Option<&crate::core::TransferProgress>,
+) -> Result<(), String> {
+    let cmd = remote_pack_command(paths, kind)?;
+    if archive_path.symlink_metadata().is_ok() {
+        return Err(format!("{} already exists", archive_path.display()));
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Cancelled".to_string());
+    }
+    // Compressed streams are smaller than `du`, so a byte total would lie.
+    // Uncompressed tar (and the zip rebuilt from it) tracks the wire bytes.
+    if let Some(p) = progress {
+        let total = match kind {
+            ContainerKind::Zip | ContainerKind::Tar => count_bytes_of_paths(conn, paths),
+            ContainerKind::TarGz | ContainerKind::TarBz2 => 0,
+        };
+        if total > 0 {
+            p.reset(total);
+        }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Cancelled".to_string());
+    }
+
+    let mut stream = conn
+        .exec_stream(&cmd, ssh::Stdin::Closed)
+        .map_err(|e| e.message)?
+        .with_cancel(Arc::clone(cancel));
+    let written = {
+        let reader = TrackedReader {
+            inner: &mut stream,
+            cancel,
+            progress,
+        };
+        crate::archive::pack_from_tar_stream(reader, archive_path, kind)
+    };
+    if let Err(e) = written {
+        return Err(if cancelled(&e) {
+            "Cancelled".to_string()
+        } else {
+            e.to_string()
+        });
+    }
+    match stream.wait() {
+        Ok(out) => {
+            if let Err(e) = check_exec(&out, "remote tar") {
+                let _ = std::fs::remove_file(archive_path);
+                return Err(e);
+            }
+        }
+        Err(e) if e.message == "Cancelled" => {
+            let _ = std::fs::remove_file(archive_path);
+            return Err("Cancelled".to_string());
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(archive_path);
+            return Err(format!("remote tar: {e}"));
+        }
+    }
+    Ok(())
+}
+
+fn cancelled(err: &io::Error) -> bool {
+    if is_cancel_err(err) {
+        return true;
+    }
+    let mut source = std::error::Error::source(err);
+    while let Some(inner) = source {
+        if inner.to_string() == "Cancelled" {
+            return true;
+        }
+        source = std::error::Error::source(inner);
+    }
+    false
+}
+
 /// Runs a command that should print nothing, treating a non-zero status as
 /// failure (and stderr when the server sends no status).
 fn exec_checked(conn: &Conn, cmd: &str, what: &str) -> Result<(), String> {
@@ -573,6 +695,43 @@ pub fn count_bytes_via_exec(conn: &Conn, path: &str) -> u64 {
             .and_then(|s| s.parse::<u64>().ok())
         {
             return n * scale;
+        }
+    }
+    0
+}
+
+/// Sum `du` sizes for every path in one remote command.
+fn count_bytes_of_paths(conn: &Conn, paths: &[String]) -> u64 {
+    if paths.is_empty() {
+        return 0;
+    }
+    let args = paths
+        .iter()
+        .map(|path| sh_quote(path))
+        .collect::<Vec<_>>()
+        .join(" ");
+    for (cmd, scale) in [
+        (format!("du -sb {args} 2>/dev/null"), 1u64),
+        (format!("du -sk {args} 2>/dev/null"), 1024u64),
+    ] {
+        let Ok(out) = conn.exec(&cmd) else {
+            continue;
+        };
+        let mut total = 0u64;
+        let mut any = false;
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let Some(n) = line
+                .split_whitespace()
+                .next()
+                .and_then(|token| token.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            total = total.saturating_add(n.saturating_mul(scale));
+            any = true;
+        }
+        if any {
+            return total;
         }
     }
     0
@@ -902,5 +1061,54 @@ pub fn discover_ssh_hosts() -> Vec<String> {
     match sunset_client::config::Config::load(&home) {
         Ok(config) => config.aliases().to_vec(),
         Err(_) => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod pack_command_tests {
+    use super::remote_pack_command;
+    use crate::archive::ContainerKind;
+
+    #[test]
+    fn quotes_members_and_picks_flags() {
+        let paths = vec!["/home/a/foo".to_string(), "/tmp/bar".to_string()];
+        assert_eq!(
+            remote_pack_command(&paths, ContainerKind::Tar).unwrap(),
+            "tar cf - -C '/home/a' './foo' -C '/tmp' './bar'"
+        );
+        assert_eq!(
+            remote_pack_command(&paths, ContainerKind::Zip).unwrap(),
+            "tar chf - -C '/home/a' './foo' -C '/tmp' './bar'"
+        );
+        assert_eq!(
+            remote_pack_command(&["/a/x".to_string()], ContainerKind::TarGz).unwrap(),
+            "tar czf - -C '/a' './x'"
+        );
+        assert_eq!(
+            remote_pack_command(&["/a/x".to_string()], ContainerKind::TarBz2).unwrap(),
+            "tar cjf - -C '/a' './x'"
+        );
+        assert_eq!(
+            remote_pack_command(&["/a/-rf".to_string()], ContainerKind::Tar).unwrap(),
+            "tar cf - -C '/a' './-rf'"
+        );
+        assert_eq!(
+            remote_pack_command(&["/a/foo'bar".to_string()], ContainerKind::Tar).unwrap(),
+            "tar cf - -C '/a' './foo'\\''bar'"
+        );
+    }
+
+    #[test]
+    fn rejects_parents_and_duplicate_names() {
+        assert!(remote_pack_command(&["/a/..".to_string()], ContainerKind::Tar).is_err());
+        assert!(remote_pack_command(&["/".to_string()], ContainerKind::Tar).is_err());
+        assert!(remote_pack_command(&[".".to_string()], ContainerKind::Tar).is_err());
+        assert!(
+            remote_pack_command(
+                &["/a/foo".to_string(), "/b/foo".to_string()],
+                ContainerKind::Tar
+            )
+            .is_err()
+        );
     }
 }

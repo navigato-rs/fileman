@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Features
+- Alt+F5 on a remote panel packs the selection into an archive on the local panel
+
 ## v0.4.0 (5 Sep 2026)
 
 ### Features

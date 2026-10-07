@@ -407,6 +407,14 @@ pub enum IOTask {
         archive_path: path::PathBuf,
         kind: crate::archive::ContainerKind,
     },
+    /// Pack remote paths into an archive on the local filesystem.
+    /// The remote side is unchanged.
+    PackRemoteToLocal {
+        host: String,
+        paths: Vec<String>,
+        archive_path: path::PathBuf,
+        kind: crate::archive::ContainerKind,
+    },
     WriteRemoteFile {
         host: String,
         path: String,
@@ -528,6 +536,9 @@ impl IOTask {
                 ref display_name, ..
             } => display_name.clone(),
             IOTask::Pack {
+                ref archive_path, ..
+            }
+            | IOTask::PackRemoteToLocal {
                 ref archive_path, ..
             } => fs_name(archive_path),
             IOTask::WriteRemoteFile { ref path, .. } => remote_name(path),

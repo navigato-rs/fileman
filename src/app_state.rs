@@ -623,6 +623,30 @@ pub enum CopyDest {
     Remote { host: String, path: String },
 }
 
+/// One item in a pack. Local and remote selections are never mixed.
+#[derive(Clone)]
+pub enum PackSource {
+    Local(path::PathBuf),
+    Remote { host: String, path: String },
+}
+
+impl PackSource {
+    pub fn file_name(&self) -> String {
+        match *self {
+            PackSource::Local(ref path) => path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("archive")
+                .to_string(),
+            PackSource::Remote { ref path, .. } => path
+                .rsplit('/')
+                .find(|part| !part.is_empty())
+                .unwrap_or("archive")
+                .to_string(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum PendingOp {
     Copy {
@@ -640,7 +664,7 @@ pub enum PendingOp {
         src: path::PathBuf,
     },
     Pack {
-        sources: Vec<path::PathBuf>,
+        sources: Vec<PackSource>,
         dst_dir: path::PathBuf,
     },
 }
@@ -1646,9 +1670,7 @@ impl AppState {
             let name = match op {
                 PendingOp::Pack { ref sources, .. } => sources
                     .first()
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str())
-                    .map(|n| format!("{n}.zip"))
+                    .map(|src| format!("{}.zip", src.file_name()))
                     .unwrap_or_else(|| "archive.zip".to_string()),
                 _ => "archive.zip".to_string(),
             };
@@ -2086,11 +2108,39 @@ impl AppState {
                     let archive_path = dst_dir.join(&archive_name);
                     let kind = crate::core::container_kind_from_path(&archive_path)
                         .unwrap_or(ContainerKind::Zip);
-                    self.enqueue_io(IOTask::Pack {
-                        sources: sources.clone(),
-                        archive_path,
-                        kind,
-                    });
+                    match sources.first() {
+                        Some(&PackSource::Remote { ref host, .. }) => {
+                            let host = host.clone();
+                            let paths = sources
+                                .iter()
+                                .filter_map(|src| match *src {
+                                    PackSource::Remote { ref path, .. } => Some(path.clone()),
+                                    PackSource::Local(_) => None,
+                                })
+                                .collect();
+                            self.enqueue_io(IOTask::PackRemoteToLocal {
+                                host,
+                                paths,
+                                archive_path,
+                                kind,
+                            });
+                        }
+                        Some(&PackSource::Local(_)) => {
+                            let sources = sources
+                                .iter()
+                                .filter_map(|src| match *src {
+                                    PackSource::Local(ref path) => Some(path.clone()),
+                                    PackSource::Remote { .. } => None,
+                                })
+                                .collect();
+                            self.enqueue_io(IOTask::Pack {
+                                sources,
+                                archive_path,
+                                kind,
+                            });
+                        }
+                        None => {}
+                    }
                 }
             }
         }
@@ -2243,21 +2293,50 @@ impl AppState {
         if indices.is_empty() {
             return None;
         }
-        let browser = self.get_active_panel().browser();
-        // Only pack filesystem entries
-        let sources: Vec<path::PathBuf> = indices
-            .iter()
-            .filter_map(|&i| match browser.entries[i].location {
-                EntryLocation::Fs(ref path) => Some(path.clone()),
-                EntryLocation::Container { .. } | EntryLocation::Remote { .. } => None,
-            })
-            .collect();
-        if sources.is_empty() {
+        // Collect first: the destination lookup borrows self again.
+        let (local, remote, current_dir) = {
+            let browser = self.get_active_panel().browser();
+            let mut local = Vec::new();
+            let mut remote = Vec::new();
+            for &i in &indices {
+                match browser.entries[i].location {
+                    EntryLocation::Fs(ref path) => local.push(path.clone()),
+                    EntryLocation::Remote { ref host, ref path } => {
+                        remote.push((host.clone(), path.clone()));
+                    }
+                    EntryLocation::Container { .. } => {}
+                }
+            }
+            (local, remote, browser.current_path.clone())
+        };
+        // A remote selection is packed onto the other panel when that panel is
+        // a local directory. Local selections still pack into their own directory.
+        if !remote.is_empty() {
+            if !local.is_empty() {
+                return None;
+            }
+            let host = remote[0].0.clone();
+            if remote.iter().any(|pair| pair.0 != host) {
+                return None;
+            }
+            let dst_dir = match self.other_panel_copy_dest() {
+                Some(CopyDest::Local(dir)) => dir,
+                _ => return None,
+            };
+            let sources = remote
+                .into_iter()
+                .map(|(host, path)| PackSource::Remote { host, path })
+                .collect();
+            return Some(PendingOp::Pack { sources, dst_dir });
+        }
+        if local.is_empty() {
             return None;
         }
-        // Archive goes into the current panel's directory
-        let dst_dir = browser.current_path.clone();
-        Some(PendingOp::Pack { sources, dst_dir })
+        let sources = local.into_iter().map(PackSource::Local).collect();
+        Some(PendingOp::Pack {
+            sources,
+            dst_dir: current_dir,
+        })
     }
 
     pub fn switch_theme(&mut self) {

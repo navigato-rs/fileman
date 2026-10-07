@@ -1546,7 +1546,19 @@ pub(crate) fn confirm_pending_op(app: &mut app_state::AppState) {
                 // restores it by name.
                 refresh_active_panel(app);
             }
-            app_state::PendingOp::Pack { .. } => refresh_active_panel(app),
+            app_state::PendingOp::Pack { ref sources, .. } => {
+                // The archive is written on the local panel. A remote selection's
+                // destination is the other panel; a local one is this panel.
+                if let Some(&app_state::PackSource::Remote { .. }) = sources.first() {
+                    let dst = match app.active_panel {
+                        core::ActivePanel::Left => core::ActivePanel::Right,
+                        core::ActivePanel::Right => core::ActivePanel::Left,
+                    };
+                    crate::reload_panel(app, dst);
+                } else {
+                    refresh_active_panel(app);
+                }
+            }
         }
     }
 }

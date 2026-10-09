@@ -37,6 +37,7 @@ fn browser() -> app_state::BrowserState {
         index_last_seen: 0,
         marked: Default::default(),
         parent_cache: Vec::new(),
+        listing_mtime: None,
     }
 }
 

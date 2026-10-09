@@ -73,6 +73,7 @@ impl PanelState {
             index_last_seen: 0,
             marked: std::collections::HashSet::new(),
             parent_cache: Vec::new(),
+            listing_mtime: None,
         };
         let new_idx = self.active_tab + 1;
         self.tabs.insert(new_idx, new_browser);
@@ -160,6 +161,8 @@ pub struct BrowserState {
     /// a child directory, popped when ascending back. Each entry may still
     /// carry an active `entries_rx` so its async loading continues.
     pub parent_cache: Vec<DirListingCache>,
+    /// Mtime of the directory or archive file this listing was read from.
+    pub listing_mtime: Option<std::time::SystemTime>,
 }
 
 /// Async-load state for a directory listing.
@@ -311,6 +314,8 @@ pub struct ArchiveFullIndex {
     /// corrupt archive, …). Callers should evict the cached index and
     /// re-attempt indexing rather than reuse the empty entries.
     pub failed: bool,
+    /// Mtime of the archive file when this index was built.
+    pub archive_mtime: Option<std::time::SystemTime>,
 }
 
 pub struct ContainerDirCache {

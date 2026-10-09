@@ -6,7 +6,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::UNIX_EPOCH,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[path = "file_identity.rs"]
@@ -281,9 +281,14 @@ pub struct DirEntry {
 pub enum DirBatch {
     Append(Vec<DirEntry>),
     Replace(Vec<DirEntry>),
+    /// Mtime of the directory this listing was read from, captured on the loader thread.
+    DirectoryModified(SystemTime),
     ContainerRoot(Option<String>),
     Loading,
-    Progress { loaded: usize, total: Option<usize> },
+    Progress {
+        loaded: usize,
+        total: Option<usize>,
+    },
     Error(String),
     ConnectionError(String),
 }

@@ -590,6 +590,7 @@ pub enum IOResult {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SortMode {
     Name,
+    Extension,
     Date,
     Size,
     Raw,

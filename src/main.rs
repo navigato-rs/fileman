@@ -743,6 +743,22 @@ fn cmp_option_u64(a: Option<u64>, b: Option<u64>, descending: bool) -> Ordering 
     }
 }
 
+/// Suffix after the last dot. A leading dot is part of the name, so
+/// `.gitignore` has no extension.
+fn file_extension(name: &str) -> &str {
+    match name.rfind('.') {
+        Some(index) if index > 0 => &name[index + 1..],
+        _ => "",
+    }
+}
+
+fn cmp_extension(a: &str, b: &str, descending: bool) -> Ordering {
+    let ord = file_extension(a)
+        .to_ascii_lowercase()
+        .cmp(&file_extension(b).to_ascii_lowercase());
+    if descending { ord.reverse() } else { ord }
+}
+
 fn sort_entries(entries: &mut Vec<core::DirEntry>, mode: core::SortMode, descending: bool) {
     if mode == core::SortMode::Raw {
         return;
@@ -763,6 +779,7 @@ fn sort_entries(entries: &mut Vec<core::DirEntry>, mode: core::SortMode, descend
                     a.name.cmp(&b.name)
                 }
             }
+            core::SortMode::Extension => cmp_extension(&a.name, &b.name, descending),
             core::SortMode::Date => cmp_option_u64(a.modified, b.modified, descending),
             core::SortMode::Size => {
                 if a.is_dir && b.is_dir {
@@ -811,6 +828,7 @@ fn resort_browser_entries(browser: &mut app_state::BrowserState) {
 fn sort_mode_label(mode: core::SortMode) -> &'static str {
     match mode {
         core::SortMode::Name => "Name",
+        core::SortMode::Extension => "Extension",
         core::SortMode::Date => "Date",
         core::SortMode::Size => "Size",
         core::SortMode::Raw => "Raw",
@@ -5864,6 +5882,46 @@ mod tests {
         assert_eq!(path, "/");
         assert_eq!(remote_parent("/home/user/a.zip"), "/home/user");
         assert_eq!(remote_parent("/a.zip"), "/");
+    }
+
+    #[test]
+    fn extension_sort_groups_by_suffix_and_keeps_the_parent_first() {
+        fn named(name: &str, is_dir: bool) -> core::DirEntry {
+            core::DirEntry {
+                name: name.to_string(),
+                is_dir,
+                is_symlink: false,
+                link_target: None,
+                location: core::EntryLocation::Fs(PathBuf::from(name)),
+                size: None,
+                modified: None,
+            }
+        }
+        let mut entries = vec![
+            named("..", true),
+            named("b.txt", false),
+            named("a.zip", false),
+            named("c.TXT", false),
+            named("readme", false),
+            named(".gitignore", false),
+            named("dir.zip", true),
+            named("folder", true),
+        ];
+        sort_entries(&mut entries, core::SortMode::Extension, false);
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "..",
+                "folder",
+                "dir.zip",
+                ".gitignore",
+                "readme",
+                "b.txt",
+                "c.TXT",
+                "a.zip",
+            ]
+        );
     }
 
     #[test]

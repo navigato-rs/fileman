@@ -613,6 +613,20 @@ pub(crate) fn handle_keyboard(
     // The search bar is a focused egui TextEdit; its select-all/copy/cut keys
     // must reach it instead of triggering panel actions (Pack/Copy/Delete).
     let search_typing = app.search_ui == app_state::SearchUiState::Open;
+    // Inline rename and the copy/move name field are TextEdits too. Ctrl+A is
+    // Pack, so it has to be left alone or the name cannot be selected. A
+    // rename stays open on its own panel after a click switches the active one.
+    let editing_name = app.pending_op().is_some()
+        || app
+            .panel(core::ActivePanel::Left)
+            .browser()
+            .inline_rename
+            .is_some()
+        || app
+            .panel(core::ActivePanel::Right)
+            .browser()
+            .inline_rename
+            .is_some();
     // In edit mode, don't consume Ctrl+letter shortcuts that egui's TextEdit
     // needs (copy, paste, cut, select-all, undo, redo, etc.).
     let ctrl_h = !in_edit && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::H));
@@ -637,8 +651,9 @@ pub(crate) fn handle_keyboard(
         });
     let ctrl_c = !in_edit
         && !search_typing
+        && !editing_name
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::C));
-    let ctrl_a = if in_preview || in_edit || search_typing {
+    let ctrl_a = if in_preview || in_edit || search_typing || editing_name {
         // Don't consume: egui's widgets handle Ctrl+A (select-all) natively.
         false
     } else {
@@ -649,6 +664,7 @@ pub(crate) fn handle_keyboard(
     let ctrl_g = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::G));
     let ctrl_x = !in_edit
         && !search_typing
+        && !editing_name
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::X));
     let ctrl_i = !in_edit && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::I));
     let ctrl_shift_o = !in_edit

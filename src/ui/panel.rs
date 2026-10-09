@@ -598,6 +598,13 @@ pub fn draw_panel(
                                                         sort_changed |= ui
                                                             .selectable_value(
                                                                 &mut sort_mode,
+                                                                core::SortMode::Extension,
+                                                                "Extension",
+                                                            )
+                                                            .changed();
+                                                        sort_changed |= ui
+                                                            .selectable_value(
+                                                                &mut sort_mode,
                                                                 core::SortMode::Date,
                                                                 "Date",
                                                             )

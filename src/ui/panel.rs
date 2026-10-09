@@ -288,7 +288,7 @@ fn header_widget(
         weak_bg_fill: bg,
         bg_fill: bg,
         bg_stroke: stroke,
-        fg_stroke: egui::Stroke::new(1.0, fg),
+        fg_stroke: egui::Stroke::new(1.0_f32, fg),
         corner_radius: egui::CornerRadius::same(4),
         expansion: 0.0,
     }
@@ -301,7 +301,7 @@ fn header_control_visuals(ui: &mut egui::Ui, colors: &theme::ThemeColors) {
     let fg = color32(colors.header_fg);
     let bg = header_chip(colors, 0.22);
     let hover = header_chip(colors, 0.38);
-    let stroke = egui::Stroke::new(1.0, color32(fade_color(colors.header_fg, 0.45)));
+    let stroke = egui::Stroke::new(1.0_f32, color32(fade_color(colors.header_fg, 0.45)));
     let visuals = &mut ui.visuals_mut().widgets;
     visuals.inactive = header_widget(bg, fg, stroke);
     visuals.hovered = header_widget(hover, fg, stroke);

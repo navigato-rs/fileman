@@ -10,6 +10,7 @@
 - Leaving a remote archive selects that archive in the parent folder
 - Focusing the window reloads a listing when its directory or archive has changed, and drops the stale parent and child caches
 - Ctrl+A selects the whole name while renaming a file or confirming a copy or move
+- The panel header sort control stays readable on macOS, and its label fits
 
 ## v0.4.0 (5 Sep 2026)
 

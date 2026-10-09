@@ -299,9 +299,24 @@ static THEME_SET: std::sync::LazyLock<syntect::highlighting::ThemeSet> =
     std::sync::LazyLock::new(syntect::highlighting::ThemeSet::load_defaults);
 
 fn apply_theme(ctx: &egui::Context, colors: &theme::ThemeColors) {
+    // egui keeps separate light and dark styles and, on macOS, follows the
+    // system. Style the slot that matches our background, or a light system
+    // button keeps its light fill under our light text.
+    let dark = colors.preview_bg.r + colors.preview_bg.g + colors.preview_bg.b < 1.5;
+    ctx.set_theme(if dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
     let mut style = (*ctx.global_style()).clone();
     style.spacing.item_spacing = egui::Vec2::new(8.0, 6.0);
     style.spacing.window_margin = egui::Margin::same(8);
+    style.visuals.dark_mode = dark;
+    style.visuals.text_options.alpha_from_coverage = if dark {
+        egui::epaint::AlphaFromCoverage::DARK_MODE_DEFAULT
+    } else {
+        egui::epaint::AlphaFromCoverage::LIGHT_MODE_DEFAULT
+    };
     style.visuals.window_fill = color32(colors.preview_bg);
     style.visuals.panel_fill = color32(colors.preview_bg);
     style.visuals.extreme_bg_color = egui::Color32::TRANSPARENT;
@@ -314,17 +329,35 @@ fn apply_theme(ctx: &egui::Context, colors: &theme::ThemeColors) {
     // Text selection
     style.visuals.selection.bg_fill = egui::Color32::from_rgba_unmultiplied(40, 80, 180, 180);
     style.visuals.selection.stroke = egui::Stroke::new(0.0_f32, egui::Color32::WHITE);
-    style.visuals.widgets.inactive.bg_fill = color32(colors.preview_bg);
-    style.visuals.widgets.inactive.fg_stroke.color = color32(colors.row_fg_inactive);
-    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-    style.visuals.widgets.active.bg_fill = color32(colors.row_bg_selected_active);
-    style.visuals.widgets.active.fg_stroke.color = color32(colors.row_fg_selected);
-    style.visuals.widgets.active.bg_stroke = egui::Stroke::NONE;
-    style.visuals.widgets.hovered.bg_fill = color32(colors.row_bg_selected_inactive);
-    style.visuals.widgets.hovered.fg_stroke.color = color32(colors.row_fg_active);
-    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+    // Combo buttons paint weak_bg_fill, not bg_fill.
+    let fill = |widget: &mut egui::style::WidgetVisuals, bg, fg| {
+        let bg = color32(bg);
+        widget.weak_bg_fill = bg;
+        widget.bg_fill = bg;
+        widget.fg_stroke.color = color32(fg);
+        widget.bg_stroke = egui::Stroke::NONE;
+    };
+    fill(
+        &mut style.visuals.widgets.inactive,
+        colors.preview_bg,
+        colors.row_fg_inactive,
+    );
+    fill(
+        &mut style.visuals.widgets.active,
+        colors.row_bg_selected_active,
+        colors.row_fg_selected,
+    );
+    fill(
+        &mut style.visuals.widgets.hovered,
+        colors.row_bg_selected_inactive,
+        colors.row_fg_active,
+    );
+    fill(
+        &mut style.visuals.widgets.open,
+        colors.preview_bg,
+        colors.row_fg_active,
+    );
     style.visuals.widgets.noninteractive.bg_stroke = egui::Stroke::NONE;
-    style.visuals.widgets.open.bg_stroke = egui::Stroke::NONE;
     style.visuals.hyperlink_color = color32(colors.panel_border_active);
     style.visuals.override_text_color = Some(color32(colors.row_fg_active));
     #[cfg(debug_assertions)]

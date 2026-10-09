@@ -273,6 +273,43 @@ enum RowAction {
     Trash,
 }
 
+fn header_chip(colors: &theme::ThemeColors, amount: f32) -> egui::Color32 {
+    let fg = colors.header_fg;
+    let away = theme::Color::rgba(1.0 - fg.r, 1.0 - fg.g, 1.0 - fg.b, 1.0);
+    color32(blend_color(colors.header_bg, away, amount))
+}
+
+fn header_widget(
+    bg: egui::Color32,
+    fg: egui::Color32,
+    stroke: egui::Stroke,
+) -> egui::style::WidgetVisuals {
+    egui::style::WidgetVisuals {
+        weak_bg_fill: bg,
+        bg_fill: bg,
+        bg_stroke: stroke,
+        fg_stroke: egui::Stroke::new(1.0, fg),
+        corner_radius: egui::CornerRadius::same(4),
+        expansion: 0.0,
+    }
+}
+
+/// Sort controls sit on `header_bg`. A system-themed button can be the same
+/// color as the label (light-on-light when macOS is in light mode), so the
+/// chip is shifted away from the label color.
+fn header_control_visuals(ui: &mut egui::Ui, colors: &theme::ThemeColors) {
+    let fg = color32(colors.header_fg);
+    let bg = header_chip(colors, 0.22);
+    let hover = header_chip(colors, 0.38);
+    let stroke = egui::Stroke::new(1.0, color32(fade_color(colors.header_fg, 0.45)));
+    let visuals = &mut ui.visuals_mut().widgets;
+    visuals.inactive = header_widget(bg, fg, stroke);
+    visuals.hovered = header_widget(hover, fg, stroke);
+    visuals.active = header_widget(hover, fg, stroke);
+    visuals.open = header_widget(bg, fg, stroke);
+    ui.visuals_mut().override_text_color = Some(fg);
+}
+
 pub fn draw_panel(
     ui: &mut egui::Ui,
     app: &mut app_state::AppState,
@@ -361,7 +398,7 @@ pub fn draw_panel(
                     ui.set_min_height(panel_height);
                     ui.spacing_mut().item_spacing = egui::Vec2::new(6.0, 4.0);
                     ui.vertical(|ui| {
-                        let header_height = 30.0;
+                        let header_height = 36.0;
                         let footer_height = 24.0;
                         let spacing = ui.spacing().item_spacing.y;
 
@@ -429,6 +466,7 @@ pub fn draw_panel(
                             |ui| {
                                 egui::Frame::NONE
                                     .fill(color32(colors.header_bg))
+                                    .inner_margin(egui::Margin::symmetric(8, 0))
                                     .corner_radius(egui::CornerRadius::same(4))
                                     .show(ui, |ui| {
                                         let panel = app.panel_mut(panel_side);
@@ -438,200 +476,197 @@ pub fn draw_panel(
                                         let mut sort_changed = false;
                                         let previous_sort_mode = browser.sort_mode;
 
-                                        let full_width = ui.available_width();
-                                        let controls_width = 120.0;
-                                        let gap = 24.0;
-                                        let left_width =
-                                            (full_width - controls_width - gap).max(0.0);
                                         let prev_spacing = ui.spacing().item_spacing;
-                                        ui.spacing_mut().item_spacing.x = 0.0;
-                                        ui.horizontal(|ui| {
-                                            let (left_rect, _) = ui.allocate_exact_size(
-                                                egui::Vec2::new(left_width, ui.available_height()),
-                                                egui::Sense::hover(),
-                                            );
-                                            let header_font =
-                                                egui::TextStyle::Body.resolve(ui.style());
-                                            let mono_font =
-                                                egui::TextStyle::Monospace.resolve(ui.style());
-                                            let header_color = color32(colors.header_fg);
-                                            let mut job = egui::text::LayoutJob::default();
-                                            if loading {
-                                                // Keep repainting so the spinner animates
-                                                ui.ctx().request_repaint_after(
-                                                    std::time::Duration::from_millis(120),
-                                                );
-                                                let t = ui.ctx().input(|i| i.time);
-                                                let frames = [
-                                                    "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇",
-                                                    "⠏",
-                                                ];
-                                                let spinner =
-                                                    frames[((t * 10.0) as usize) % frames.len()];
-                                                job.append(
-                                                    spinner,
-                                                    0.0,
-                                                    egui::text::TextFormat {
-                                                        font_id: mono_font.clone(),
-                                                        color: header_color,
-                                                        ..Default::default()
-                                                    },
-                                                );
-                                                job.append(
-                                                    " ",
-                                                    0.0,
-                                                    egui::text::TextFormat {
-                                                        font_id: mono_font.clone(),
-                                                        color: header_color,
-                                                        ..Default::default()
-                                                    },
-                                                );
-                                            }
-                                            // Reserve space for the active-panel dot
-                                            let dot_space =
-                                                if is_active { header_font.size } else { 0.0 };
-                                            let sep_color =
-                                                color32(fade_color(colors.header_fg, 0.55));
-                                            let text_fmt = |font: &egui::FontId, color| {
-                                                egui::text::TextFormat {
-                                                    font_id: font.clone(),
-                                                    color,
-                                                    ..Default::default()
+                                        ui.spacing_mut().item_spacing.x = 6.0;
+                                        ui.set_min_size(ui.available_size());
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                header_control_visuals(ui, &colors);
+                                                let header_color = color32(colors.header_fg);
+                                                egui::ComboBox::from_id_salt(match panel_side {
+                                                    core::ActivePanel::Left => "left_sort_mode",
+                                                    core::ActivePanel::Right => "right_sort_mode",
+                                                })
+                                                .width(132.0)
+                                                .wrap_mode(egui::TextWrapMode::Extend)
+                                                .selected_text(
+                                                    egui::RichText::new(sort_mode_label(sort_mode))
+                                                        .color(header_color),
+                                                )
+                                                .show_ui(ui, |ui| {
+                                                    sort_changed |= ui
+                                                        .selectable_value(
+                                                            &mut sort_mode,
+                                                            core::SortMode::Name,
+                                                            "Name",
+                                                        )
+                                                        .changed();
+                                                    sort_changed |= ui
+                                                        .selectable_value(
+                                                            &mut sort_mode,
+                                                            core::SortMode::Extension,
+                                                            "Extension",
+                                                        )
+                                                        .changed();
+                                                    sort_changed |= ui
+                                                        .selectable_value(
+                                                            &mut sort_mode,
+                                                            core::SortMode::Date,
+                                                            "Date",
+                                                        )
+                                                        .changed();
+                                                    sort_changed |= ui
+                                                        .selectable_value(
+                                                            &mut sort_mode,
+                                                            core::SortMode::Size,
+                                                            "Size",
+                                                        )
+                                                        .changed();
+                                                    sort_changed |= ui
+                                                        .selectable_value(
+                                                            &mut sort_mode,
+                                                            core::SortMode::Raw,
+                                                            "Raw",
+                                                        )
+                                                        .changed();
+                                                });
+                                                let direction =
+                                                    if sort_desc { "Z-A" } else { "A-Z" };
+                                                if ui
+                                                    .button(direction)
+                                                    .on_hover_text("Reverse the sort order")
+                                                    .clicked()
+                                                {
+                                                    sort_desc = !sort_desc;
+                                                    sort_changed = true;
                                                 }
-                                            };
-
-                                            // Prefix (host:, drive:, archive!) — no separator
-                                            // before it, gets the dot leading space.
-                                            let mut leading = dot_space;
-                                            if !header_segments.prefix.is_empty() {
-                                                job.append(
-                                                    &header_segments.prefix,
-                                                    leading,
-                                                    text_fmt(&header_font, header_color),
-                                                );
-                                                leading = 0.0;
-                                            }
-
-                                            // Breadcrumb segments with colored ASCII separators.
-                                            // (Was ▸, but egui's bundled fonts don't include
-                                            // U+25B8 on every system — fell back to '>' which is
-                                            // guaranteed to render.)
-                                            for seg in &header_segments.segments {
-                                                job.append(
-                                                    " > ",
-                                                    leading,
-                                                    text_fmt(&header_font, sep_color),
-                                                );
-                                                leading = 0.0;
-                                                job.append(
-                                                    seg,
-                                                    0.0,
-                                                    text_fmt(&header_font, header_color),
-                                                );
-                                            }
-
-                                            // Selection / total counter
-                                            job.append(
-                                                &header_count_text,
-                                                leading,
-                                                text_fmt(&header_font, header_color),
-                                            );
-
-                                            // Progress suffix in parentheses
-                                            if loading
-                                                && let Some((loaded, total)) = loading_progress
-                                            {
-                                                let progress_str = match total {
-                                                    Some(total) => format!(" ({loaded}/{total})"),
-                                                    None => format!(" ({loaded})"),
-                                                };
-                                                job.append(
-                                                    &progress_str,
-                                                    0.0,
-                                                    text_fmt(&header_font, header_color),
-                                                );
-                                            }
-                                            let galley = ui.fonts_mut(|f| f.layout_job(job));
-                                            let painter = ui.painter().with_clip_rect(left_rect);
-                                            let pos = egui::Align2::LEFT_CENTER.anchor_size(
-                                                left_rect.left_center(),
-                                                galley.size(),
-                                            );
-                                            painter.galley(pos.min, galley, header_color);
-                                            if is_active {
-                                                let radius = header_font.size * 0.25;
-                                                let center = egui::pos2(
-                                                    pos.min.x + radius + 1.0,
-                                                    left_rect.center().y,
-                                                );
-                                                painter.circle_filled(center, radius, header_color);
-                                            }
-                                            if left_width > 0.0 {
-                                                ui.add_space(gap);
-                                            }
-                                            ui.allocate_ui_with_layout(
-                                                egui::Vec2::new(
-                                                    controls_width,
-                                                    ui.available_height(),
-                                                ),
-                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                |ui| {
-                                                    egui::ComboBox::from_id_salt(
-                                                        match panel_side {
-                                                            core::ActivePanel::Left => {
-                                                                "left_sort_mode"
-                                                            }
-                                                            core::ActivePanel::Right => {
-                                                                "right_sort_mode"
-                                                            }
+                                                ui.add_space(8.0);
+                                                let left_rect = ui.available_rect_before_wrap();
+                                                let header_font =
+                                                    egui::TextStyle::Body.resolve(ui.style());
+                                                let mono_font =
+                                                    egui::TextStyle::Monospace.resolve(ui.style());
+                                                let mut job = egui::text::LayoutJob::default();
+                                                if loading {
+                                                    // Keep repainting so the spinner animates
+                                                    ui.ctx().request_repaint_after(
+                                                        std::time::Duration::from_millis(120),
+                                                    );
+                                                    let t = ui.ctx().input(|i| i.time);
+                                                    let frames = [
+                                                        "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧",
+                                                        "⠇", "⠏",
+                                                    ];
+                                                    let spinner = frames
+                                                        [((t * 10.0) as usize) % frames.len()];
+                                                    job.append(
+                                                        spinner,
+                                                        0.0,
+                                                        egui::text::TextFormat {
+                                                            font_id: mono_font.clone(),
+                                                            color: header_color,
+                                                            ..Default::default()
                                                         },
-                                                    )
-                                                    .selected_text(sort_mode_label(sort_mode))
-                                                    .show_ui(ui, |ui| {
-                                                        sort_changed |= ui
-                                                            .selectable_value(
-                                                                &mut sort_mode,
-                                                                core::SortMode::Name,
-                                                                "Name",
-                                                            )
-                                                            .changed();
-                                                        sort_changed |= ui
-                                                            .selectable_value(
-                                                                &mut sort_mode,
-                                                                core::SortMode::Extension,
-                                                                "Extension",
-                                                            )
-                                                            .changed();
-                                                        sort_changed |= ui
-                                                            .selectable_value(
-                                                                &mut sort_mode,
-                                                                core::SortMode::Date,
-                                                                "Date",
-                                                            )
-                                                            .changed();
-                                                        sort_changed |= ui
-                                                            .selectable_value(
-                                                                &mut sort_mode,
-                                                                core::SortMode::Size,
-                                                                "Size",
-                                                            )
-                                                            .changed();
-                                                        sort_changed |= ui
-                                                            .selectable_value(
-                                                                &mut sort_mode,
-                                                                core::SortMode::Raw,
-                                                                "Raw",
-                                                            )
-                                                            .changed();
-                                                    });
-                                                    let arrow = if sort_desc { "v" } else { "^" };
-                                                    if ui.small_button(arrow).clicked() {
-                                                        sort_desc = !sort_desc;
-                                                        sort_changed = true;
+                                                    );
+                                                    job.append(
+                                                        " ",
+                                                        0.0,
+                                                        egui::text::TextFormat {
+                                                            font_id: mono_font.clone(),
+                                                            color: header_color,
+                                                            ..Default::default()
+                                                        },
+                                                    );
+                                                }
+                                                // Reserve space for the active-panel dot
+                                                let dot_space =
+                                                    if is_active { header_font.size } else { 0.0 };
+                                                let sep_color =
+                                                    color32(fade_color(colors.header_fg, 0.55));
+                                                let text_fmt = |font: &egui::FontId, color| {
+                                                    egui::text::TextFormat {
+                                                        font_id: font.clone(),
+                                                        color,
+                                                        ..Default::default()
                                                     }
-                                                },
-                                            );
-                                        });
+                                                };
+
+                                                // Prefix (host:, drive:, archive!) — no separator
+                                                // before it, gets the dot leading space.
+                                                let mut leading = dot_space;
+                                                if !header_segments.prefix.is_empty() {
+                                                    job.append(
+                                                        &header_segments.prefix,
+                                                        leading,
+                                                        text_fmt(&header_font, header_color),
+                                                    );
+                                                    leading = 0.0;
+                                                }
+
+                                                // Breadcrumb segments with colored ASCII separators.
+                                                // (Was ▸, but egui's bundled fonts don't include
+                                                // U+25B8 on every system — fell back to '>' which is
+                                                // guaranteed to render.)
+                                                for seg in &header_segments.segments {
+                                                    job.append(
+                                                        " > ",
+                                                        leading,
+                                                        text_fmt(&header_font, sep_color),
+                                                    );
+                                                    leading = 0.0;
+                                                    job.append(
+                                                        seg,
+                                                        0.0,
+                                                        text_fmt(&header_font, header_color),
+                                                    );
+                                                }
+
+                                                // Selection / total counter
+                                                job.append(
+                                                    &header_count_text,
+                                                    leading,
+                                                    text_fmt(&header_font, header_color),
+                                                );
+
+                                                // Progress suffix in parentheses
+                                                if loading
+                                                    && let Some((loaded, total)) = loading_progress
+                                                {
+                                                    let progress_str = match total {
+                                                        Some(total) => {
+                                                            format!(" ({loaded}/{total})")
+                                                        }
+                                                        None => format!(" ({loaded})"),
+                                                    };
+                                                    job.append(
+                                                        &progress_str,
+                                                        0.0,
+                                                        text_fmt(&header_font, header_color),
+                                                    );
+                                                }
+                                                let galley = ui.fonts_mut(|f| f.layout_job(job));
+                                                let painter =
+                                                    ui.painter().with_clip_rect(left_rect);
+                                                let pos = egui::Align2::LEFT_CENTER.anchor_size(
+                                                    left_rect.left_center(),
+                                                    galley.size(),
+                                                );
+                                                painter.galley(pos.min, galley, header_color);
+                                                if is_active {
+                                                    let radius = header_font.size * 0.25;
+                                                    let center = egui::pos2(
+                                                        pos.min.x + radius + 1.0,
+                                                        left_rect.center().y,
+                                                    );
+                                                    painter.circle_filled(
+                                                        center,
+                                                        radius,
+                                                        header_color,
+                                                    );
+                                                }
+                                            },
+                                        );
                                         ui.spacing_mut().item_spacing = prev_spacing;
 
                                         if sort_changed {

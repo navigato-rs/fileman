@@ -17,9 +17,9 @@ use std::{
     hash::{Hash, Hasher},
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
-    time::UNIX_EPOCH,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 mod image_decode;
@@ -917,6 +917,10 @@ fn apply_dir_batch(browser: &mut app_state::BrowserState, batch: core::DirBatch)
             }
             return;
         }
+        core::DirBatch::DirectoryModified(mtime) => {
+            browser.listing_mtime = Some(mtime);
+            return;
+        }
         core::DirBatch::ContainerRoot(root) => {
             browser.container_root = root;
             if let core::BrowserMode::Container {
@@ -1104,6 +1108,9 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
                     }
                     core::DirBatch::Error(_) | core::DirBatch::ConnectionError(_) => {
                         cached.load.finish();
+                    }
+                    core::DirBatch::DirectoryModified(mtime) => {
+                        cached.dir_mtime = Some(mtime);
                     }
                     core::DirBatch::ContainerRoot(_) => {}
                 }
@@ -1739,9 +1746,7 @@ fn load_sftp_directory_async(
                 synthetic.starts_with(&browser.current_path) && synthetic != browser.current_path;
             if is_child {
                 // Descending: push current directory (with entries_rx) onto stack.
-                let dir_mtime = std::fs::metadata(&browser.current_path)
-                    .and_then(|m| m.modified())
-                    .ok();
+                let dir_mtime = captured_dir_mtime(browser);
                 let cache = app_state::DirListingCache {
                     current_path: browser.current_path.clone(),
                     entries: std::mem::take(&mut browser.entries),
@@ -1780,6 +1785,7 @@ fn load_sftp_directory_async(
                     browser.watching_archive = None;
                     browser.progress_override = None;
                     browser.marked.clear();
+                    browser.listing_mtime = cached.dir_mtime;
                     sort_entries(&mut browser.entries, sort_mode, sort_desc);
                     if let Some(ref name) = prefer_name
                         && let Some(idx) = browser.entries.iter().position(|e| e.name == *name)
@@ -1847,6 +1853,7 @@ fn load_sftp_directory_async(
         });
         browser.selected_index = 0;
         browser.top_index = 0;
+        browser.listing_mtime = None;
     }
     browser.dir_token = browser.dir_token.wrapping_add(1);
     browser.load = app_state::LoadState::start(rx, browser.dir_token);
@@ -1882,6 +1889,20 @@ fn spawn_sftp_load_thread(
     thread::spawn(move || {
         let _directory = navigato_support::timer(navigato_support::Metric::DirectoryRemote);
         let locked = session.lock().unwrap_or_else(|p| p.into_inner());
+        let stat_path = if path.is_empty() { "/" } else { path.as_str() };
+        if let Some(secs) = locked
+            .sftp
+            .stat(stat_path)
+            .ok()
+            .and_then(|attrs| attrs.mtime)
+        {
+            let _ = tx.send(core::DirBatch::DirectoryModified(unix_secs_to_system_time(
+                u64::from(secs),
+            )));
+            if let Some(ref wake) = wake {
+                wake();
+            }
+        }
         let mut buffered: Vec<core::DirEntry> = Vec::new();
         let mut first = true;
         let result = fileman::sftp::read_directory_streaming(&locked.sftp, &host, &path, |batch| {
@@ -1947,9 +1968,7 @@ fn load_fs_directory_async(
         if is_child {
             // Descending: push the current directory onto the parent stack
             // (with its entries_rx so async loading keeps going).
-            let dir_mtime = std::fs::metadata(&browser.current_path)
-                .and_then(|m| m.modified())
-                .ok();
+            let dir_mtime = captured_dir_mtime(browser);
             let cache = app_state::DirListingCache {
                 current_path: browser.current_path.clone(),
                 entries: std::mem::take(&mut browser.entries),
@@ -1996,6 +2015,7 @@ fn load_fs_directory_async(
                     browser.index_last_seen = 0;
                     browser.progress_override = None;
                     browser.marked.clear();
+                    browser.listing_mtime = cached.dir_mtime;
                     // Re-sort since batches accumulated without sorting.
                     sort_entries(&mut browser.entries, sort_mode, sort_desc);
                     if let Some(ref name) = prefer_name
@@ -2260,6 +2280,7 @@ fn load_fs_directory_async(
     browser.watching_archive = None;
     browser.index_last_seen = 0;
     browser.progress_override = None;
+    browser.listing_mtime = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
 }
 
 fn build_listing_from_index(
@@ -2434,6 +2455,48 @@ fn build_listing_from_index(
     entries
 }
 
+/// Mtime to store on a parent-cache entry. Local directories are re-stat'd.
+/// Remote listings keep the stamp from the SFTP stat; the synthetic `/sftp/...`
+/// path is not a local directory.
+fn captured_dir_mtime(browser: &app_state::BrowserState) -> Option<SystemTime> {
+    match browser.browser_mode {
+        core::BrowserMode::Fs => fs::metadata(&browser.current_path)
+            .and_then(|meta| meta.modified())
+            .ok(),
+        _ => browser.listing_mtime,
+    }
+}
+
+pub(crate) fn unix_secs_to_system_time(secs: u64) -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(secs)
+}
+
+/// Stamp for an archive listing. Local files are stat'd here. Remote archives
+/// carry the mtime from the directory entry that opened them, or the stamp
+/// already stored while browsing inside the same archive.
+fn container_fresh_mtime(
+    app: &app_state::AppState,
+    panel: core::ActivePanel,
+    archive_path: &Path,
+    known_mtime: Option<SystemTime>,
+) -> Option<SystemTime> {
+    if fileman::sftp::decode_archive_path(archive_path).is_some() {
+        let browser = app.panel(panel).browser();
+        let carried = match browser.browser_mode {
+            core::BrowserMode::Container {
+                archive_path: ref previous,
+                ..
+            } if previous == archive_path => browser.listing_mtime,
+            _ => None,
+        };
+        known_mtime.or(carried)
+    } else {
+        fs::metadata(archive_path)
+            .and_then(|meta| meta.modified())
+            .ok()
+    }
+}
+
 fn load_container_directory_async(
     app: &mut app_state::AppState,
     kind: core::ContainerKind,
@@ -2444,14 +2507,33 @@ fn load_container_directory_async(
     prefer_name: Option<String>,
     cache_mode: ContainerLoadMode,
     return_remote: Option<(String, String)>,
+    known_mtime: Option<SystemTime>,
 ) {
     navigato_support::feature(navigato_support::Feature::Archive);
     app.stash_container_cache(target_panel);
+    let fresh_mtime = container_fresh_mtime(app, target_panel, &archive_path, known_mtime);
+    let stored_mtime = app.archive_index.get(&archive_path).and_then(|shared| {
+        shared
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .archive_mtime
+    });
+    let mut cache_mode = cache_mode;
+    if cache_mode == ContainerLoadMode::UseCache
+        && matches!(
+            (stored_mtime, fresh_mtime),
+            (Some(old), Some(now)) if now > old
+        )
+    {
+        cache_mode = ContainerLoadMode::ForceReload;
+    }
     let cache_key = (archive_path.clone(), cwd.clone(), kind);
     let mut cached = app.container_dir_cache.remove(&cache_key);
     if cache_mode == ContainerLoadMode::ForceReload {
         cached = None;
         app.archive_index.remove(&archive_path);
+        app.container_dir_cache
+            .retain(|key, _| key.0 != archive_path);
     }
     let mut root_hint = root_hint.or_else(|| cached.as_ref().and_then(|cache| cache.root.clone()));
     let mut initial: Vec<core::DirEntry> = if let Some(ref cache) = cached {
@@ -2563,6 +2645,7 @@ fn load_container_directory_async(
             root: root_hint.clone(),
             complete: false,
             failed: false,
+            archive_mtime: None,
         }));
         app.archive_index
             .insert(archive_path.clone(), shared.clone());
@@ -2812,6 +2895,15 @@ fn load_container_directory_async(
         0
     };
 
+    if let Some(mtime) = fresh_mtime
+        && let Some(shared) = app.archive_index.get(&archive_path)
+    {
+        let mut index = shared.lock().unwrap_or_else(|poison| poison.into_inner());
+        if index.archive_mtime.is_none() {
+            index.archive_mtime = Some(mtime);
+        }
+    }
+
     let panel_state = app.panel_mut(target_panel);
     let browser = panel_state.browser_mut();
     let initial_loading = resume_load
@@ -2864,6 +2956,11 @@ fn load_container_directory_async(
         Some((0, None))
     } else {
         None
+    };
+    browser.listing_mtime = if used_index || skip_loading {
+        stored_mtime.or(fresh_mtime)
+    } else {
+        fresh_mtime
     };
 }
 
@@ -2996,6 +3093,7 @@ fn apply_panel_snapshot(
                 which,
                 snapshot.selected_name,
                 ContainerLoadMode::UseCache,
+                None,
                 None,
             );
         }
@@ -3221,6 +3319,7 @@ fn reload_panel(app: &mut app_state::AppState, which: core::ActivePanel) {
             selected_name,
             ContainerLoadMode::ForceReload,
             None,
+            None,
         ),
         core::BrowserMode::Remote { ref host, ref path } => {
             load_sftp_directory_async(app, host, path, which, selected_name);
@@ -3239,6 +3338,431 @@ fn reload_panel(app: &mut app_state::AppState, which: core::ActivePanel) {
             }
         }
     }
+}
+
+/// One directory or archive whose mtime is checked when the window gains focus.
+struct FocusProbe {
+    target: FocusTarget,
+    stored: SystemTime,
+    source: FocusSource,
+}
+
+enum FocusTarget {
+    Panel {
+        side: core::ActivePanel,
+        dir_token: u64,
+    },
+    Parent {
+        side: core::ActivePanel,
+        path: PathBuf,
+    },
+    Archive(PathBuf),
+}
+
+enum FocusSource {
+    Local(PathBuf),
+    Remote {
+        path: String,
+        session: Arc<Mutex<fileman::sftp::SftpSession>>,
+    },
+}
+
+struct FocusMtimeHit {
+    target: FocusTarget,
+    stored: SystemTime,
+    current: Option<SystemTime>,
+}
+
+struct FocusMtimeReport {
+    hits: Vec<FocusMtimeHit>,
+}
+
+fn mtime_is_newer(stored: SystemTime, current: Option<SystemTime>) -> bool {
+    match current {
+        Some(now) => now > stored,
+        None => false,
+    }
+}
+
+fn parse_sftp_listing_path(path: &Path) -> Option<(String, String)> {
+    let mut parts = path.components();
+    if !matches!(parts.next(), Some(std::path::Component::RootDir)) {
+        return None;
+    }
+    match parts.next() {
+        Some(std::path::Component::Normal(name)) if name == "sftp" => {}
+        _ => return None,
+    }
+    let host = match parts.next() {
+        Some(std::path::Component::Normal(name)) => name.to_str()?.to_string(),
+        _ => return None,
+    };
+    let mut remote = String::new();
+    for part in parts {
+        let std::path::Component::Normal(name) = part else {
+            return None;
+        };
+        remote.push('/');
+        remote.push_str(name.to_str()?);
+    }
+    if remote.is_empty() {
+        remote = "/".to_string();
+    }
+    Some((host, remote))
+}
+
+fn remote_parent(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return "/".to_string();
+    }
+    match trimmed.rfind('/') {
+        Some(0) | None => "/".to_string(),
+        Some(pos) => trimmed[..pos].to_string(),
+    }
+}
+
+fn remote_paths_eq(left: &str, right: &str) -> bool {
+    fn normalize(path: &str) -> &str {
+        let trimmed = path.trim_end_matches('/');
+        if trimmed.is_empty() { "/" } else { trimmed }
+    }
+    normalize(left) == normalize(right)
+}
+
+fn remote_session(
+    app: &app_state::AppState,
+    host: &str,
+) -> Option<Arc<Mutex<fileman::sftp::SftpSession>>> {
+    app.sftp_sessions.get(host).cloned()
+}
+
+fn listing_source(
+    app: &app_state::AppState,
+    browser: &app_state::BrowserState,
+) -> Option<FocusSource> {
+    match browser.browser_mode {
+        core::BrowserMode::Fs => Some(FocusSource::Local(browser.current_path.clone())),
+        core::BrowserMode::Remote { ref host, ref path } => {
+            let session = remote_session(app, host)?;
+            Some(FocusSource::Remote {
+                path: path.clone(),
+                session,
+            })
+        }
+        core::BrowserMode::Container {
+            ref archive_path, ..
+        } => archive_source(app, archive_path),
+        core::BrowserMode::Search { .. } => None,
+    }
+}
+
+fn archive_source(app: &app_state::AppState, archive_path: &Path) -> Option<FocusSource> {
+    if let Some((host, remote)) = fileman::sftp::decode_archive_path(archive_path) {
+        let session = remote_session(app, &host)?;
+        Some(FocusSource::Remote {
+            path: remote,
+            session,
+        })
+    } else {
+        Some(FocusSource::Local(archive_path.to_path_buf()))
+    }
+}
+
+fn parent_source(app: &app_state::AppState, path: &Path) -> Option<FocusSource> {
+    if let Some((host, remote)) = parse_sftp_listing_path(path) {
+        let session = remote_session(app, &host)?;
+        Some(FocusSource::Remote {
+            path: remote,
+            session,
+        })
+    } else {
+        Some(FocusSource::Local(path.to_path_buf()))
+    }
+}
+
+fn panel_shows_archive(browser: &app_state::BrowserState, archive: &Path) -> bool {
+    match browser.browser_mode {
+        core::BrowserMode::Container {
+            archive_path: ref open,
+            ..
+        } => open == archive,
+        _ => false,
+    }
+}
+
+fn associated_archives(app: &app_state::AppState, side: core::ActivePanel) -> Vec<PathBuf> {
+    let keys: Vec<PathBuf> = app.archive_index.keys().cloned().collect();
+    let browser = app.panel(side).browser();
+    match browser.browser_mode {
+        core::BrowserMode::Container {
+            ref archive_path, ..
+        } => vec![archive_path.clone()],
+        core::BrowserMode::Fs => keys
+            .into_iter()
+            .filter(|path| path.parent() == Some(browser.current_path.as_path()))
+            .collect(),
+        core::BrowserMode::Remote { ref host, ref path } => keys
+            .into_iter()
+            .filter(|archive| {
+                fileman::sftp::decode_archive_path(archive).is_some_and(|(archive_host, remote)| {
+                    &archive_host == host && remote_paths_eq(&remote_parent(&remote), path)
+                })
+            })
+            .collect(),
+        core::BrowserMode::Search { .. } => Vec::new(),
+    }
+}
+
+fn archive_is_open(app: &app_state::AppState, archive: &Path) -> bool {
+    [core::ActivePanel::Left, core::ActivePanel::Right]
+        .into_iter()
+        .any(|side| panel_shows_archive(app.panel(side).browser(), archive))
+}
+
+fn archive_in_visible_directory(app: &app_state::AppState, archive: &Path) -> bool {
+    [core::ActivePanel::Left, core::ActivePanel::Right]
+        .into_iter()
+        .any(|side| {
+            let browser = app.panel(side).browser();
+            match browser.browser_mode {
+                core::BrowserMode::Fs => archive.parent() == Some(browser.current_path.as_path()),
+                core::BrowserMode::Remote { ref host, ref path } => {
+                    fileman::sftp::decode_archive_path(archive).is_some_and(
+                        |(archive_host, remote)| {
+                            &archive_host == host && remote_paths_eq(&remote_parent(&remote), path)
+                        },
+                    )
+                }
+                _ => false,
+            }
+        })
+}
+
+fn collect_focus_probes(app: &app_state::AppState) -> Vec<FocusProbe> {
+    let mut probes = Vec::new();
+    for side in [core::ActivePanel::Left, core::ActivePanel::Right] {
+        let browser = app.panel(side).browser();
+        if let Some(stored) = browser.listing_mtime
+            && let Some(source) = listing_source(app, browser)
+        {
+            probes.push(FocusProbe {
+                target: FocusTarget::Panel {
+                    side,
+                    dir_token: browser.dir_token,
+                },
+                stored,
+                source,
+            });
+        }
+        for cached in &browser.parent_cache {
+            if let Some(stored) = cached.dir_mtime
+                && let Some(source) = parent_source(app, &cached.current_path)
+            {
+                probes.push(FocusProbe {
+                    target: FocusTarget::Parent {
+                        side,
+                        path: cached.current_path.clone(),
+                    },
+                    stored,
+                    source,
+                });
+            }
+        }
+    }
+    let indexed: Vec<(PathBuf, SystemTime)> = app
+        .archive_index
+        .iter()
+        .filter_map(|(path, index)| {
+            let stored = index
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .archive_mtime?;
+            Some((path.clone(), stored))
+        })
+        .collect();
+    for (path, stored) in indexed {
+        if archive_is_open(app, &path) || !archive_in_visible_directory(app, &path) {
+            continue;
+        }
+        if let Some(source) = archive_source(app, &path) {
+            probes.push(FocusProbe {
+                target: FocusTarget::Archive(path),
+                stored,
+                source,
+            });
+        }
+    }
+    probes
+}
+
+fn stat_focus_source(source: &FocusSource) -> Option<SystemTime> {
+    match source {
+        FocusSource::Local(path) => fs::metadata(path).and_then(|meta| meta.modified()).ok(),
+        FocusSource::Remote { path, session } => {
+            let locked = session.lock().unwrap_or_else(|poison| poison.into_inner());
+            let secs = locked.sftp.stat(path).ok()?.mtime?;
+            Some(unix_secs_to_system_time(u64::from(secs)))
+        }
+    }
+}
+
+fn drop_archive_cache(app: &mut app_state::AppState, archive: &Path) {
+    app.archive_index.remove(archive);
+    app.container_dir_cache.retain(|key, _| key.0 != archive);
+}
+
+fn queue_reload(
+    reloads: &mut Vec<(core::ActivePanel, Option<SystemTime>)>,
+    side: core::ActivePanel,
+    stamp: Option<SystemTime>,
+) {
+    if let Some(existing) = reloads.iter_mut().find(|reload| reload.0 == side) {
+        if existing.1.is_none() {
+            existing.1 = stamp;
+        }
+    } else {
+        reloads.push((side, stamp));
+    }
+}
+
+fn apply_focus_report(app: &mut app_state::AppState, report: FocusMtimeReport) -> bool {
+    let mut reloads: Vec<(core::ActivePanel, Option<SystemTime>)> = Vec::new();
+    let mut parent_hits = Vec::new();
+    let mut stale_archives = Vec::new();
+
+    for hit in report.hits {
+        let Some(now) = hit.current else {
+            continue;
+        };
+        if !mtime_is_newer(hit.stored, Some(now)) {
+            continue;
+        }
+        match hit.target {
+            FocusTarget::Panel { side, dir_token } => {
+                let browser = app.panel(side).browser();
+                if browser.dir_token == dir_token && browser.listing_mtime == Some(hit.stored) {
+                    queue_reload(&mut reloads, side, Some(now));
+                }
+            }
+            FocusTarget::Parent { side, path } => parent_hits.push((side, path, hit.stored)),
+            FocusTarget::Archive(path) => {
+                let matches_stamp = app.archive_index.get(&path).is_some_and(|shared| {
+                    shared
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .archive_mtime
+                        == Some(hit.stored)
+                });
+                if matches_stamp {
+                    for side in [core::ActivePanel::Left, core::ActivePanel::Right] {
+                        if panel_shows_archive(app.panel(side).browser(), &path) {
+                            queue_reload(&mut reloads, side, Some(now));
+                        }
+                    }
+                    stale_archives.push(path);
+                }
+            }
+        }
+    }
+
+    let queued: Vec<core::ActivePanel> = reloads.iter().map(|reload| reload.0).collect();
+    for side in queued {
+        for path in associated_archives(app, side) {
+            for other in [core::ActivePanel::Left, core::ActivePanel::Right] {
+                if other != side && panel_shows_archive(app.panel(other).browser(), &path) {
+                    queue_reload(&mut reloads, other, None);
+                }
+            }
+            if !stale_archives.iter().any(|existing| existing == &path) {
+                stale_archives.push(path);
+            }
+        }
+    }
+
+    let mut changed = !reloads.is_empty() || !stale_archives.is_empty();
+    for (side, path, stored) in parent_hits {
+        if reloads.iter().any(|reload| reload.0 == side) {
+            continue;
+        }
+        let browser = app.panel_mut(side).browser_mut();
+        let Some(index) = browser
+            .parent_cache
+            .iter()
+            .position(|cached| cached.current_path == path && cached.dir_mtime == Some(stored))
+        else {
+            continue;
+        };
+        browser.parent_cache.truncate(index);
+        changed = true;
+    }
+
+    for path in &stale_archives {
+        drop_archive_cache(app, path);
+    }
+    for (side, stamp) in reloads {
+        {
+            let browser = app.panel_mut(side).browser_mut();
+            browser.parent_cache.clear();
+            if let Some(mtime) = stamp {
+                browser.listing_mtime = Some(mtime);
+            }
+        }
+        reload_panel(app, side);
+        changed = true;
+    }
+    changed
+}
+
+fn begin_focus_probe(runtime: &mut Runtime) {
+    let probes = collect_focus_probes(&runtime.app);
+    if probes.is_empty() {
+        return;
+    }
+    runtime.focus_inflight = true;
+    let tx = runtime.focus_tx.clone();
+    let wake = runtime.app.wake.clone();
+    thread::spawn(move || {
+        let hits = probes
+            .into_iter()
+            .map(|probe| FocusMtimeHit {
+                current: stat_focus_source(&probe.source),
+                target: probe.target,
+                stored: probe.stored,
+            })
+            .collect();
+        let _ = tx.send(FocusMtimeReport { hits });
+        if let Some(wake) = wake {
+            wake();
+        }
+    });
+}
+
+fn note_window_focus(runtime: &mut Runtime) {
+    if runtime.focus_inflight {
+        runtime.focus_again = true;
+        return;
+    }
+    begin_focus_probe(runtime);
+}
+
+fn poll_focus_mtime(runtime: &mut Runtime) -> bool {
+    let mut changed = false;
+    let mut saw_report = false;
+    while let Ok(report) = runtime.focus_rx.try_recv() {
+        saw_report = true;
+        if apply_focus_report(&mut runtime.app, report) {
+            changed = true;
+        }
+    }
+    if saw_report {
+        runtime.focus_inflight = false;
+        if runtime.focus_again {
+            runtime.focus_again = false;
+            begin_focus_probe(runtime);
+        }
+    }
+    changed
 }
 
 #[cfg(unix)]
@@ -3420,6 +3944,12 @@ struct Runtime {
     needs_redraw: bool,
     /// Earliest time egui has requested a repaint via `request_repaint_after`.
     next_repaint: Option<std::time::Instant>,
+    /// Mtime checks started when the window gains focus. The worker stats off
+    /// the UI thread and the redraw drains the report.
+    focus_tx: mpsc::Sender<FocusMtimeReport>,
+    focus_rx: mpsc::Receiver<FocusMtimeReport>,
+    focus_inflight: bool,
+    focus_again: bool,
 }
 
 impl Runtime {
@@ -4008,6 +4538,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     index_last_seen: 0,
                     marked: std::collections::HashSet::new(),
                     parent_cache: Vec::new(),
+                    listing_mtime: None,
                 }],
                 active_tab: 0,
                 mode: app_state::PanelMode::Browser,
@@ -4033,6 +4564,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     index_last_seen: 0,
                     marked: std::collections::HashSet::new(),
                     parent_cache: Vec::new(),
+                    listing_mtime: None,
                 }],
                 active_tab: 0,
                 mode: app_state::PanelMode::Browser,
@@ -4153,6 +4685,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
         };
         let highlight_cache = HashMap::new();
         let highlight_pending = HashSet::new();
+        let (focus_tx, focus_rx) = mpsc::channel();
 
         self.runtime = Some(Runtime {
             window,
@@ -4181,6 +4714,10 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             image_pending: VecDeque::new(),
             needs_redraw: true,
             next_repaint: None,
+            focus_tx,
+            focus_rx,
+            focus_inflight: false,
+            focus_again: false,
         });
     }
 
@@ -4250,6 +4787,9 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     }
                 }
                 let _ = pump_async(&mut runtime.app);
+                if poll_focus_mtime(runtime) {
+                    let _ = pump_async(&mut runtime.app);
+                }
                 let mut decoded_images = Vec::new();
                 while decoded_images.len() < MAX_IMAGE_UPLOADS_PER_FRAME {
                     if let Some(img) = runtime.image_pending.pop_front() {
@@ -4768,6 +5308,9 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                 }
             }
             other => {
+                if matches!(other, winit::event::WindowEvent::Focused(true)) {
+                    note_window_focus(runtime);
+                }
                 let is_key_release = matches!(
                     other,
                     winit::event::WindowEvent::KeyboardInput { ref event, .. }
@@ -4843,7 +5386,8 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             if !runtime.highlight_results.is_empty() {
                 runtime.window.request_redraw();
             }
-            if pump_async(&mut runtime.app) {
+            let listings_changed = poll_focus_mtime(runtime);
+            if pump_async(&mut runtime.app) || listings_changed {
                 runtime.needs_redraw = true;
             }
             if let Some(t) = runtime.next_repaint {
@@ -5281,6 +5825,7 @@ mod tests {
             index_last_seen: 0,
             marked: std::collections::HashSet::new(),
             parent_cache: Vec::new(),
+            listing_mtime: None,
         }
     }
 
@@ -5297,6 +5842,38 @@ mod tests {
         let names: Vec<&str> = browser.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
         assert!(!browser.load.is_loading());
+    }
+
+    #[test]
+    fn directory_modified_stamps_the_listing_without_moving_the_cursor() {
+        let mut browser = remote_browser(&["a.txt", "b.txt", "c.txt"]);
+        let stamp = unix_secs_to_system_time(1_700_000_000);
+        apply_dir_batch(&mut browser, core::DirBatch::DirectoryModified(stamp));
+        assert_eq!(browser.listing_mtime, Some(stamp));
+        assert_eq!(browser.selected_index, 1);
+        assert_eq!(browser.entries.len(), 3);
+    }
+
+    #[test]
+    fn sftp_listing_path_splits_host_and_directory() {
+        let (host, path) = parse_sftp_listing_path(Path::new("/sftp/dev/home/user")).unwrap();
+        assert_eq!(host, "dev");
+        assert_eq!(path, "/home/user");
+        let (host, path) = parse_sftp_listing_path(Path::new("/sftp/dev")).unwrap();
+        assert_eq!(host, "dev");
+        assert_eq!(path, "/");
+        assert_eq!(remote_parent("/home/user/a.zip"), "/home/user");
+        assert_eq!(remote_parent("/a.zip"), "/");
+    }
+
+    #[test]
+    fn a_newer_mtime_is_stale_and_a_missing_one_is_not() {
+        let older = unix_secs_to_system_time(10);
+        let newer = unix_secs_to_system_time(11);
+        assert!(mtime_is_newer(older, Some(newer)));
+        assert!(!mtime_is_newer(newer, Some(older)));
+        assert!(!mtime_is_newer(older, Some(older)));
+        assert!(!mtime_is_newer(older, None));
     }
 
     // A hard listing error (e.g. permission denied) is different: it replaces

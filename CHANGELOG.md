@@ -5,6 +5,10 @@
 ### Features
 - Alt+F5 on a remote panel packs the selection into an archive on the local panel
 
+### Fixes
+- Leaving a remote archive selects that archive in the parent folder
+- Focusing the window reloads a listing when its directory or archive has changed, and drops the stale parent and child caches
+
 ## v0.4.0 (5 Sep 2026)
 
 ### Features

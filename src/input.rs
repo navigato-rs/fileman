@@ -424,6 +424,23 @@ fn shell_properties_dialog(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Name to select after `..` on a remote listing. Inside a remote archive the
+/// browser is in container mode, and the parent folder should land on the
+/// archive file itself.
+fn remote_ascend_name(mode: &core::BrowserMode) -> Option<String> {
+    match mode {
+        core::BrowserMode::Remote { path, .. } => path
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .map(|name| name.to_string()),
+        core::BrowserMode::Container { archive_path, .. } => archive_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        _ => None,
+    }
+}
+
 fn open_selected_from_to(
     app: &mut app_state::AppState,
     source: core::ActivePanel,
@@ -474,6 +491,7 @@ fn open_selected_from_to(
                     None,
                     ContainerLoadMode::UseCache,
                     None,
+                    None,
                 );
             }
         }
@@ -513,26 +531,15 @@ fn open_selected_from_to(
                     prefer_name,
                     ContainerLoadMode::UseCache,
                     None,
+                    None,
                 );
             }
         }
         core::EntryLocation::Remote { host, path } => {
             if selected_entry.is_dir {
                 let prefer_name = if selected_entry.name == ".." {
-                    // Extract last component of current remote path
                     let browser = app.panel(source).browser();
-                    if let core::BrowserMode::Remote {
-                        path: ref cur_path, ..
-                    } = browser.browser_mode
-                    {
-                        cur_path
-                            .trim_end_matches('/')
-                            .rsplit('/')
-                            .next()
-                            .map(|s| s.to_string())
-                    } else {
-                        None
-                    }
+                    remote_ascend_name(&browser.browser_mode)
                 } else {
                     None
                 };
@@ -547,6 +554,7 @@ fn open_selected_from_to(
                     .rsplit_once('/')
                     .map(|(parent, _)| parent.to_string())
                     .unwrap_or_else(|| "/".to_string());
+                let known_mtime = selected_entry.modified.map(crate::unix_secs_to_system_time);
                 load_container_directory_async(
                     app,
                     kind,
@@ -557,6 +565,7 @@ fn open_selected_from_to(
                     None,
                     ContainerLoadMode::UseCache,
                     Some((host, return_dir)),
+                    known_mtime,
                 );
             }
         }
@@ -1804,4 +1813,33 @@ pub(crate) fn build_selected_paths(app: &app_state::AppState) -> Option<String> 
         return None;
     }
     Some(paths.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use fileman::core;
+
+    use super::remote_ascend_name;
+
+    #[test]
+    fn leaving_a_remote_directory_selects_that_directory() {
+        let mode = core::BrowserMode::Remote {
+            host: "host".into(),
+            path: "/home/projects".into(),
+        };
+        assert_eq!(remote_ascend_name(&mode).as_deref(), Some("projects"));
+    }
+
+    #[test]
+    fn leaving_a_remote_archive_selects_the_archive_file() {
+        let mode = core::BrowserMode::Container {
+            kind: core::ContainerKind::Zip,
+            archive_path: PathBuf::from("/.sftp-archive/host/home/pack.zip"),
+            cwd: String::new(),
+            root: None,
+        };
+        assert_eq!(remote_ascend_name(&mode).as_deref(), Some("pack.zip"));
+    }
 }

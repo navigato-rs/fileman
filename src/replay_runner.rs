@@ -806,6 +806,7 @@ fn build_panel_dump(panel: &app_state::PanelState) -> PanelDump {
     };
     let sort_mode = match browser.sort_mode {
         core::SortMode::Name => "Name",
+        core::SortMode::Extension => "Extension",
         core::SortMode::Date => "Date",
         core::SortMode::Size => "Size",
         core::SortMode::Raw => "Raw",

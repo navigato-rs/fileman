@@ -4,10 +4,12 @@
 
 ### Features
 - Alt+F5 on a remote panel packs the selection into an archive on the local panel
+- Sort the file list by extension
 
 ### Fixes
 - Leaving a remote archive selects that archive in the parent folder
 - Focusing the window reloads a listing when its directory or archive has changed, and drops the stale parent and child caches
+- Ctrl+A selects the whole name while renaming a file or confirming a copy or move
 
 ## v0.4.0 (5 Sep 2026)
 

@@ -843,6 +843,7 @@ fn sort_entries(entries: &mut Vec<core::DirEntry>, mode: core::SortMode, descend
 }
 
 fn resort_browser_entries(browser: &mut app_state::BrowserState) {
+    let requery = lift_folder_narrow(browser);
     let selected_name = browser
         .entries
         .get(browser.selected_index)
@@ -855,6 +856,147 @@ fn resort_browser_entries(browser: &mut app_state::BrowserState) {
     }
     if browser.selected_index < browser.top_index {
         browser.top_index = browser.selected_index;
+    }
+    if let Some(query) = requery {
+        publish_folder_narrow(browser, &query);
+    }
+}
+
+fn folder_query_match(name: &str, query: &str) -> bool {
+    if name == ".." || query.is_empty() {
+        return false;
+    }
+    name.to_ascii_lowercase()
+        .starts_with(&query.to_ascii_lowercase())
+}
+
+/// Prefix matches first. A fragment that is not a prefix still matches
+/// anywhere in the name, so "load" finds Downloads. `..` is skipped.
+fn folder_query_matches<'a>(entries: &'a [core::DirEntry], query: &str) -> Vec<&'a core::DirEntry> {
+    let prefix: Vec<&core::DirEntry> = entries
+        .iter()
+        .filter(|entry| folder_query_match(&entry.name, query))
+        .collect();
+    if !prefix.is_empty() {
+        return prefix;
+    }
+    let query = query.to_ascii_lowercase();
+    entries
+        .iter()
+        .filter(|entry| entry.name != ".." && entry.name.to_ascii_lowercase().contains(&query))
+        .collect()
+}
+
+/// Put the full listing back and report the query that was narrowing it.
+fn lift_folder_narrow(browser: &mut app_state::BrowserState) -> Option<String> {
+    let narrow = browser.folder_narrow.take()?;
+    if narrow.dir_token != browser.dir_token {
+        return None;
+    }
+    let selected = browser
+        .entries
+        .get(browser.selected_index)
+        .map(|entry| entry.name.clone());
+    browser.entries = narrow.entries;
+    let name = selected.unwrap_or(narrow.anchor);
+    if let Some(idx) = browser.entries.iter().position(|entry| entry.name == name) {
+        browser.selected_index = idx;
+    }
+    Some(narrow.query)
+}
+
+fn publish_folder_narrow(browser: &mut app_state::BrowserState, query: &str) {
+    let query = query.trim();
+    if query.is_empty() {
+        return;
+    }
+    if let Some(ref narrow) = browser.folder_narrow
+        && narrow.query == query
+        && narrow.dir_token == browser.dir_token
+    {
+        return;
+    }
+    let selected_name = browser
+        .entries
+        .get(browser.selected_index)
+        .map(|entry| entry.name.clone());
+    let source = match browser.folder_narrow.take() {
+        Some(narrow) if narrow.dir_token == browser.dir_token => narrow.entries,
+        _ => std::mem::take(&mut browser.entries),
+    };
+    let anchor = selected_name.clone().unwrap_or_default();
+    let filtered: Vec<core::DirEntry> = folder_query_matches(&source, query)
+        .into_iter()
+        .cloned()
+        .collect();
+    let idx = selected_name
+        .and_then(|name| filtered.iter().position(|entry| entry.name == name))
+        .unwrap_or(0);
+    let anchor = filtered
+        .get(idx)
+        .map(|entry| entry.name.clone())
+        .unwrap_or(anchor);
+    let len = filtered.len();
+    browser.entries = filtered;
+    browser.selected_index = if len == 0 { 0 } else { idx.min(len - 1) };
+    if browser.selected_index < browser.top_index {
+        browser.top_index = browser.selected_index;
+    }
+    browser.folder_narrow = Some(app_state::FolderNarrow {
+        entries: source,
+        query: query.to_string(),
+        dir_token: browser.dir_token,
+        anchor,
+    });
+}
+
+pub(crate) fn restore_folder_narrow(browser: &mut app_state::BrowserState) {
+    let Some(narrow) = browser.folder_narrow.take() else {
+        return;
+    };
+    if matches!(browser.browser_mode, core::BrowserMode::Search { .. })
+        || narrow.dir_token != browser.dir_token
+    {
+        return;
+    }
+    let selected = browser
+        .entries
+        .get(browser.selected_index)
+        .map(|entry| entry.name.clone());
+    browser.entries = narrow.entries;
+    let name = selected.unwrap_or(narrow.anchor);
+    if let Some(idx) = browser.entries.iter().position(|entry| entry.name == name) {
+        browser.selected_index = idx;
+    } else if !browser.entries.is_empty() && browser.selected_index >= browser.entries.len() {
+        browser.selected_index = browser.entries.len() - 1;
+    }
+    if browser.selected_index < browser.top_index {
+        browser.top_index = browser.selected_index;
+    }
+}
+
+pub(crate) fn sync_folder_narrow(app: &mut app_state::AppState) {
+    let query = app.search_query.trim().to_string();
+    let want = app.search_ui == app_state::SearchUiState::Open
+        && app.search_mode == core::SearchMode::Name
+        && !query.is_empty();
+    let active = app.active_panel;
+    for side in [core::ActivePanel::Left, core::ActivePanel::Right] {
+        let panel = app.panel_mut(side);
+        let active_tab = panel.active_tab;
+        for (idx, browser) in panel.tabs.iter_mut().enumerate() {
+            let folder = matches!(
+                browser.browser_mode,
+                core::BrowserMode::Fs
+                    | core::BrowserMode::Remote { .. }
+                    | core::BrowserMode::Container { .. }
+            );
+            if want && side == active && idx == active_tab && folder {
+                publish_folder_narrow(browser, &query);
+            } else {
+                restore_folder_narrow(browser);
+            }
+        }
     }
 }
 
@@ -954,6 +1096,14 @@ fn entries_name_equivalent(a: &[core::DirEntry], b: &[core::DirEntry]) -> bool {
 }
 
 fn apply_dir_batch(browser: &mut app_state::BrowserState, batch: core::DirBatch) {
+    // A name filter is showing a subset. Append and replace have to land on
+    // the full listing; the next sync publishes the subset again.
+    if matches!(
+        &batch,
+        core::DirBatch::Append(_) | core::DirBatch::Replace(_)
+    ) {
+        let _ = lift_folder_narrow(browser);
+    }
     let prior_index = browser.selected_index;
     let prior_selection = browser.entries.get(prior_index).map(|e| e.name.clone());
 
@@ -1243,6 +1393,7 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
                     let mut listing = build_listing_from_index(&idx, &archive_path, kind, &cwd);
                     drop(idx);
                     sort_entries(&mut listing, browser.sort_mode, browser.sort_desc);
+                    let _ = lift_folder_narrow(browser);
                     // Only replace entries if the filtered listing actually changed.
                     // The raw index grows with entries from all directories, but
                     // the listing for this cwd may be unchanged. Skipping avoids
@@ -1714,19 +1865,18 @@ fn navigate_quick_jump(
         return;
     }
     if result.category == app_state::QuickJumpCategory::Remote {
-        // Navigate on the current remote host
-        let host = {
-            let browser = app.panel(target_panel).browser();
-            if let core::BrowserMode::Remote { ref host, .. } = browser.browser_mode {
-                Some(host.clone())
-            } else {
-                None
+        let host = match result.host {
+            Some(host) => host,
+            None => {
+                let browser = app.panel(target_panel).browser();
+                match browser.browser_mode {
+                    core::BrowserMode::Remote { ref host, .. } => host.clone(),
+                    _ => return,
+                }
             }
         };
-        if let Some(host) = host {
-            let remote_path = result.path.to_string_lossy().to_string();
-            load_sftp_directory_async(app, &host, &remote_path, target_panel, None);
-        }
+        let remote_path = result.path.to_string_lossy().to_string();
+        load_sftp_directory_async(app, &host, &remote_path, target_panel, None);
         return;
     }
     if result.path.is_dir() {
@@ -1784,6 +1934,12 @@ fn load_sftp_directory_async(
             return;
         }
     };
+    let home = session
+        .try_lock()
+        .ok()
+        .and_then(|session| session.home_dir.clone());
+    let remote_path = fileman::sftp::canonicalize_remote_path(remote_path, home.as_deref());
+    let remote_path = remote_path.as_str();
 
     // Use the synthetic path for stack comparisons.
     let synthetic = PathBuf::from(format!("/sftp/{host}{remote_path}"));
@@ -4590,6 +4746,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     marked: std::collections::HashSet::new(),
                     parent_cache: Vec::new(),
                     listing_mtime: None,
+                    folder_narrow: None,
                 }],
                 active_tab: 0,
                 mode: app_state::PanelMode::Browser,
@@ -4616,6 +4773,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                     marked: std::collections::HashSet::new(),
                     parent_cache: Vec::new(),
                     listing_mtime: None,
+                    folder_narrow: None,
                 }],
                 active_tab: 0,
                 mode: app_state::PanelMode::Browser,
@@ -5877,7 +6035,39 @@ mod tests {
             marked: std::collections::HashSet::new(),
             parent_cache: Vec::new(),
             listing_mtime: None,
+            folder_narrow: None,
         }
+    }
+
+    #[test]
+    fn name_search_narrows_the_folder_and_escape_keeps_the_match() {
+        let mut browser = remote_browser(&["..", "Documents", "Downloads", "readme"]);
+        browser.selected_index = 0;
+        publish_folder_narrow(&mut browser, "d");
+        let names: Vec<&str> = browser
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, ["Documents", "Downloads"]);
+        assert_eq!(browser.entries[browser.selected_index].name, "Documents");
+
+        browser.selected_index = 1;
+        publish_folder_narrow(&mut browser, "do");
+        assert_eq!(browser.entries[browser.selected_index].name, "Downloads");
+
+        publish_folder_narrow(&mut browser, "load");
+        assert_eq!(browser.entries.len(), 1);
+        assert_eq!(browser.entries[0].name, "Downloads");
+
+        restore_folder_narrow(&mut browser);
+        let names: Vec<&str> = browser
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, ["..", "Documents", "Downloads", "readme"]);
+        assert_eq!(browser.entries[browser.selected_index].name, "Downloads");
     }
 
     // A dropped session must keep the last-known listing on screen so the user

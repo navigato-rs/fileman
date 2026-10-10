@@ -610,6 +610,8 @@ pub(crate) fn handle_keyboard(
     if app.settings_open() {
         return;
     }
+    // Narrow the open folder to the search text before arrows and Escape see it.
+    crate::sync_folder_narrow(app);
     // The search bar is a focused egui TextEdit; its select-all/copy/cut keys
     // must reach it instead of triggering panel actions (Pack/Copy/Delete).
     let search_typing = app.search_ui == app_state::SearchUiState::Open;
@@ -737,29 +739,10 @@ pub(crate) fn handle_keyboard(
             }
             ctx.request_repaint();
         } else if input.key_pressed(egui::Key::Enter) {
-            let result = app.quick_jump().and_then(|qj| {
-                if !qj.filtered.is_empty() {
-                    let entry = &qj.entries[qj.filtered[qj.selected]];
-                    Some(crate::ui::quick_jump::QuickJumpResult {
-                        path: entry.path.clone(),
-                        category: entry.category,
-                    })
-                } else if !qj.input.is_empty() {
-                    let expanded = if qj.input.starts_with("~/") || qj.input == "~" {
-                        std::env::var("HOME")
-                            .map(|h| qj.input.replacen('~', &h, 1))
-                            .unwrap_or_else(|_| qj.input.clone())
-                    } else {
-                        qj.input.clone()
-                    };
-                    Some(crate::ui::quick_jump::QuickJumpResult {
-                        path: std::path::PathBuf::from(expanded),
-                        category: app_state::QuickJumpCategory::Home,
-                    })
-                } else {
-                    None
-                }
-            });
+            let here = crate::ui::quick_jump::current_remote(app);
+            let result = app
+                .quick_jump()
+                .and_then(|qj| crate::ui::quick_jump::go_to_from_input(qj, here.as_ref()));
             let active = app.active_panel;
             app.close_quick_jump();
             if let Some(result) = result {
@@ -925,6 +908,7 @@ pub(crate) fn handle_keyboard(
     if app.search_ui == app_state::SearchUiState::Open {
         if input.key_pressed(egui::Key::Escape) {
             cancel_search(app);
+            crate::restore_folder_narrow(app.get_active_panel_mut().browser_mut());
             app.search_ui = app_state::SearchUiState::Closed;
             ctx.request_repaint();
             return;

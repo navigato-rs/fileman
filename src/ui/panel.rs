@@ -1131,11 +1131,24 @@ pub fn draw_panel(
                                                     "Search:",
                                                 );
                                                 let id = ui.make_persistent_id("search_edit");
-                                                let response = egui::TextEdit::singleline(
+                                                let in_full_search = matches!(
+                                                    app.panel(panel_side_for_closure)
+                                                        .browser()
+                                                        .browser_mode,
+                                                    core::BrowserMode::Search { .. }
+                                                );
+                                                let name_search =
+                                                    app.search_mode == core::SearchMode::Name;
+                                                let mut edit = egui::TextEdit::singleline(
                                                     &mut app.search_query,
                                                 )
-                                                .id(id)
-                                                .show(ui);
+                                                .id(id);
+                                                if name_search && !in_full_search {
+                                                    edit = edit.hint_text(
+                                                        "names here, Enter searches subfolders",
+                                                    );
+                                                }
+                                                let response = edit.show(ui);
                                                 if app.search_focus {
                                                     response.response.request_focus();
                                                     // Select all so typing replaces the old query.

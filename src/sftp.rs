@@ -1041,6 +1041,58 @@ pub fn copy_permissions(conn: &Conn, attrs: FileAttrs, dst: &str) -> Result<(), 
     }
 }
 
+/// `~` and `~/…` use the remote home directory. Anything else is unchanged,
+/// including a leading `~` while home is still unknown.
+fn expand_remote_tilde(path: &str, home: Option<&str>) -> String {
+    let Some(rest) = path.strip_prefix('~') else {
+        return path.to_string();
+    };
+    if !rest.is_empty() && !rest.starts_with('/') {
+        return path.to_string();
+    }
+    let Some(home) = home.filter(|home| !home.is_empty()) else {
+        return path.to_string();
+    };
+    let home = home.trim_end_matches('/');
+    if rest.is_empty() {
+        if home.is_empty() {
+            "/".to_string()
+        } else {
+            home.to_string()
+        }
+    } else {
+        format!("{home}{rest}")
+    }
+}
+
+/// Collapse `.` and `..` into an absolute remote path.
+pub fn normalize_remote_path(path: &str) -> String {
+    let mut parts = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    if parts.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", parts.join("/"))
+    }
+}
+
+pub fn canonicalize_remote_path(path: &str, home: Option<&str>) -> String {
+    let expanded = expand_remote_tilde(path.trim(), home);
+    if expanded.starts_with('~') {
+        expanded
+    } else {
+        normalize_remote_path(&expanded)
+    }
+}
+
 fn parent_remote_path(path: &str) -> String {
     if path == "/" || path.is_empty() {
         return "/".to_string();
@@ -1061,6 +1113,27 @@ pub fn discover_ssh_hosts() -> Vec<String> {
     match sunset_client::config::Config::load(&home) {
         Ok(config) => config.aliases().to_vec(),
         Err(_) => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod remote_path_tests {
+    #[test]
+    fn tilde_uses_the_remote_home_and_dots_collapse() {
+        assert_eq!(
+            super::canonicalize_remote_path("~/src", Some("/home/me")),
+            "/home/me/src"
+        );
+        assert_eq!(
+            super::canonicalize_remote_path("~", Some("/home/me")),
+            "/home/me"
+        );
+        assert_eq!(super::canonicalize_remote_path("~/src", None), "~/src");
+        assert_eq!(
+            super::canonicalize_remote_path("/var/www/../log/./a", None),
+            "/var/log/a"
+        );
+        assert_eq!(super::canonicalize_remote_path("..", None), "/");
     }
 }
 

@@ -38,6 +38,7 @@ fn browser() -> app_state::BrowserState {
         marked: Default::default(),
         parent_cache: Vec::new(),
         listing_mtime: None,
+        folder_narrow: None,
     }
 }
 

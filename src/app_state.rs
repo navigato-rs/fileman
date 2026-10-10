@@ -74,6 +74,7 @@ impl PanelState {
             marked: std::collections::HashSet::new(),
             parent_cache: Vec::new(),
             listing_mtime: None,
+            folder_narrow: None,
         };
         let new_idx = self.active_tab + 1;
         self.tabs.insert(new_idx, new_browser);
@@ -163,6 +164,17 @@ pub struct BrowserState {
     pub parent_cache: Vec<DirListingCache>,
     /// Mtime of the directory or archive file this listing was read from.
     pub listing_mtime: Option<std::time::SystemTime>,
+    /// Full listing hidden while the search box is narrowing this folder.
+    pub folder_narrow: Option<FolderNarrow>,
+}
+
+/// The unfiltered folder listing, kept while a name search shows only matches.
+pub struct FolderNarrow {
+    pub entries: Vec<DirEntry>,
+    pub query: String,
+    pub dir_token: u64,
+    /// Last match to reselect if the filtered view is empty when we restore.
+    pub anchor: String,
 }
 
 /// Async-load state for a directory listing.

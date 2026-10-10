@@ -5,12 +5,14 @@
 ### Features
 - Alt+F5 on a remote panel packs the selection into an archive on the local panel
 - Sort the file list by extension
+- Name search lists matching names in the current folder as you type. Enter runs the full search, and Escape returns to the folder on the file you picked
 
 ### Fixes
 - Leaving a remote archive selects that archive in the parent folder
 - Focusing the window reloads a listing when its directory or archive has changed, and drops the stale parent and child caches
 - Ctrl+A selects the whole name while renaming a file or confirming a copy or move
 - The panel header sort control stays readable on macOS, and its label fits
+- Go To opens a path on the current remote, and `host:/path` on any host
 
 ## v0.4.0 (5 Sep 2026)
 

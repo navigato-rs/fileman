@@ -42,7 +42,7 @@ pub fn draw_help(
             ("F6 / Ctrl+M", "Move"),
             ("F8 / Ctrl+X", "Delete"),
             ("Space", "Compute folder size"),
-            ("Alt+F7", "Search by name"),
+            ("Alt+F7", "Filter this folder; Enter searches"),
             ("Shift+Alt+F7", "Search by content"),
             ("Ctrl+F", "Find in preview"),
             ("Alt+Enter", "Properties"),

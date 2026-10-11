@@ -81,14 +81,19 @@ impl PanelState {
         self.active_tab = new_idx;
     }
 
-    pub fn close_tab(&mut self) {
-        if self.tabs.len() <= 1 {
-            return;
+    /// Drop one tab. The last tab stays. The active index keeps pointing at the
+    /// same folder when a neighbor closes, and steps back when the last tab does.
+    pub fn close_tab_at(&mut self, index: usize) -> bool {
+        if self.tabs.len() <= 1 || index >= self.tabs.len() {
+            return false;
         }
-        self.tabs.remove(self.active_tab);
-        if self.active_tab >= self.tabs.len() {
+        self.tabs.remove(index);
+        if self.active_tab > index {
+            self.active_tab -= 1;
+        } else if self.active_tab >= self.tabs.len() {
             self.active_tab = self.tabs.len() - 1;
         }
+        true
     }
 
     pub fn next_tab(&mut self) {
@@ -2437,6 +2442,67 @@ fn local_copy_collisions(dir: &path::Path, names: &[String]) -> Vec<String> {
         .filter(|name| dir.join(name).symlink_metadata().is_ok())
         .cloned()
         .collect()
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::{BrowserMode, BrowserState, LoadState, PanelMode, PanelState, SortMode};
+
+    fn browser(path: &str) -> BrowserState {
+        BrowserState {
+            browser_mode: BrowserMode::Fs,
+            current_path: std::path::PathBuf::from(path),
+            selected_index: 0,
+            entries: Vec::new(),
+            load: LoadState::Idle,
+            progress_override: None,
+            prefer_select_name: None,
+            top_index: 0,
+            container_root: None,
+            dir_token: 0,
+            history_back: Vec::new(),
+            history_forward: Vec::new(),
+            inline_rename: None,
+            sort_mode: SortMode::Name,
+            sort_desc: false,
+            watching_archive: None,
+            index_last_seen: 0,
+            marked: std::collections::HashSet::new(),
+            parent_cache: Vec::new(),
+            listing_mtime: None,
+            folder_narrow: None,
+        }
+    }
+
+    fn panel(paths: &[&str], active: usize) -> PanelState {
+        PanelState {
+            tabs: paths.iter().copied().map(browser).collect(),
+            active_tab: active,
+            mode: PanelMode::Browser,
+        }
+    }
+
+    #[test]
+    fn closing_a_tab_keeps_the_active_folder() {
+        let mut tabs = panel(&["/a", "/b", "/c"], 2);
+        assert!(tabs.close_tab_at(0));
+        assert_eq!(tabs.active_tab, 1);
+        assert_eq!(tabs.tabs[tabs.active_tab].current_path.as_os_str(), "/c");
+
+        let mut tabs = panel(&["/a", "/b", "/c"], 1);
+        assert!(tabs.close_tab_at(1));
+        assert_eq!(tabs.active_tab, 1);
+        assert_eq!(tabs.tabs[tabs.active_tab].current_path.as_os_str(), "/c");
+
+        let mut tabs = panel(&["/a", "/b"], 1);
+        assert!(tabs.close_tab_at(1));
+        assert_eq!(tabs.active_tab, 0);
+        assert_eq!(tabs.tabs.len(), 1);
+
+        let mut tabs = panel(&["/only"], 0);
+        assert!(!tabs.close_tab_at(0));
+        assert_eq!(tabs.tabs.len(), 1);
+    }
 }
 
 #[cfg(test)]

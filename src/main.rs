@@ -3341,6 +3341,27 @@ fn apply_panel_snapshot(
     }
 }
 
+pub(crate) fn close_browser_tab(
+    app: &mut app_state::AppState,
+    side: core::ActivePanel,
+    index: usize,
+) {
+    let panel = app.panel(side);
+    if panel.tabs.len() <= 1 || index >= panel.tabs.len() {
+        return;
+    }
+    if app.search_target == Some((side, index)) {
+        cancel_search(app);
+        app.search_target = None;
+    } else if let Some((which, tab)) = app.search_target
+        && which == side
+        && tab > index
+    {
+        app.search_target = Some((which, tab - 1));
+    }
+    app.panel_mut(side).close_tab_at(index);
+}
+
 fn cancel_search(app: &mut app_state::AppState) {
     app.search_cancel
         .store(true, std::sync::atomic::Ordering::Relaxed);

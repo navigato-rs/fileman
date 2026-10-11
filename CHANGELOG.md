@@ -13,6 +13,7 @@
 - Ctrl+A selects the whole name while renaming a file or confirming a copy or move
 - The panel header sort control stays readable on macOS, and its label fits
 - Go To opens a path on the current remote, and `host:/path` on any host
+- Click a panel tab to select it, and its × to close it
 
 ## v0.4.0 (5 Sep 2026)
 

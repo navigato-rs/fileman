@@ -22,6 +22,7 @@ pub fn draw_help(
             ("Tab", "Switch panels"),
             ("Ctrl+T", "New tab"),
             ("Ctrl+W", "Close tab"),
+            ("Click tab / ×", "Select / close tab"),
             ("Ctrl+Tab / Ctrl+Shift+Tab", "Next / prev tab"),
             ("Ctrl+U", "Swap panels"),
             ("Alt+Left / Alt+Right", "Back / forward"),

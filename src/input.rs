@@ -1004,7 +1004,9 @@ pub(crate) fn handle_keyboard(
     }
     let ctrl_w = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::W));
     if ctrl_w && active_is_browser_mode {
-        app.get_active_panel_mut().close_tab();
+        let side = app.active_panel;
+        let index = app.panel(side).active_tab;
+        crate::close_browser_tab(app, side, index);
         ctx.request_repaint();
     }
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::U)) {

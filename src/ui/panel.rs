@@ -294,6 +294,182 @@ fn header_widget(
     }
 }
 
+enum TabPress {
+    Select,
+    Close,
+}
+
+fn tab_title(browser: &app_state::BrowserState) -> String {
+    browser
+        .current_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("/")
+        .to_string()
+}
+
+fn tab_tooltip(browser: &app_state::BrowserState) -> String {
+    match browser.browser_mode {
+        core::BrowserMode::Remote { ref host, ref path } => format!("{host}:{path}"),
+        core::BrowserMode::Fs => browser.current_path.display().to_string(),
+        core::BrowserMode::Container {
+            ref archive_path,
+            ref cwd,
+            ..
+        } => {
+            let name = archive_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("archive");
+            format!("{name}:{cwd}")
+        }
+        core::BrowserMode::Search {
+            ref root,
+            ref query,
+            ..
+        } => {
+            format!("{query} in {}", root.display())
+        }
+    }
+}
+
+/// Width left for the folder name once every tab, its padding, and its × fit.
+fn tab_name_width(ui: &egui::Ui, count: usize) -> f32 {
+    let count = count.max(1) as f32;
+    let gap = ui.spacing().item_spacing.x;
+    let chrome = 32.0;
+    let available = ui.available_width();
+    let each = (available - gap * (count - 1.0)).max(0.0) / count;
+    (each - chrome).clamp(16.0, 160.0)
+}
+
+fn tab_button(
+    ui: &mut egui::Ui,
+    index: usize,
+    browser: &app_state::BrowserState,
+    active: bool,
+    colors: &theme::ThemeColors,
+    name_width: f32,
+) -> Option<TabPress> {
+    let title = tab_title(browser);
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::single_section(
+        title,
+        egui::TextFormat {
+            font_id: font,
+            color: egui::Color32::PLACEHOLDER,
+            ..Default::default()
+        },
+    );
+    job.wrap.max_width = name_width;
+    job.wrap.max_rows = 1;
+    job.wrap.break_anywhere = true;
+    let galley = ui.painter().layout_job(job);
+    let close_font = egui::TextStyle::Small.resolve(ui.style());
+    let close_galley =
+        ui.painter()
+            .layout_no_wrap("×".to_string(), close_font, egui::Color32::PLACEHOLDER);
+
+    let pad_x = 6.0;
+    let gap = 4.0;
+    let close_w = 16.0;
+    let width = pad_x + galley.size().x + gap + close_w + pad_x;
+    let height = 22.0;
+    ui.push_id(index, |ui| {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+        let close_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.right() - pad_x - close_w, rect.top() + 2.0),
+            egui::vec2(close_w, height - 4.0),
+        );
+        let over_close = response
+            .hover_pos()
+            .is_some_and(|pos| close_rect.contains(pos));
+        let fill = if active {
+            colors.header_bg
+        } else if response.hovered() {
+            blend_color(colors.footer_bg, colors.header_bg, 0.55)
+        } else {
+            colors.footer_bg
+        };
+        let text = if active {
+            colors.header_fg
+        } else {
+            colors.row_fg_inactive
+        };
+        let galley_elided = galley.elided;
+        if ui.is_rect_visible(rect) {
+            ui.painter().rect_filled(
+                rect,
+                egui::CornerRadius {
+                    nw: 4,
+                    ne: 4,
+                    sw: 0,
+                    se: 0,
+                },
+                color32(fill),
+            );
+            if over_close {
+                ui.painter().rect_filled(
+                    close_rect,
+                    egui::CornerRadius::same(4),
+                    color32(blend_color(fill, text, 0.2)),
+                );
+            }
+            let text_pos = egui::pos2(rect.left() + pad_x, rect.center().y - galley.size().y * 0.5);
+            ui.painter().galley(text_pos, galley, color32(text));
+            let close_pos = egui::pos2(
+                close_rect.center().x - close_galley.size().x * 0.5,
+                close_rect.center().y - close_galley.size().y * 0.5,
+            );
+            ui.painter().galley(close_pos, close_galley, color32(text));
+        }
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let response = if galley_elided {
+            response.on_hover_text(tab_tooltip(browser))
+        } else {
+            response
+        };
+        if response.clicked() {
+            let on_close = response
+                .interact_pointer_pos()
+                .is_some_and(|pos| close_rect.contains(pos));
+            Some(if on_close {
+                TabPress::Close
+            } else {
+                TabPress::Select
+            })
+        } else {
+            None
+        }
+    })
+    .inner
+}
+
+fn draw_tab_bar(
+    ui: &mut egui::Ui,
+    tabs: &[app_state::BrowserState],
+    active_tab: usize,
+    colors: &theme::ThemeColors,
+) -> Option<(usize, TabPress)> {
+    let name_width = tab_name_width(ui, tabs.len());
+    let mut action = None;
+    ui.allocate_ui_with_layout(
+        egui::Vec2::new(ui.available_width(), 22.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            for (index, browser) in tabs.iter().enumerate() {
+                if let Some(press) =
+                    tab_button(ui, index, browser, index == active_tab, colors, name_width)
+                {
+                    action = Some((index, press));
+                }
+            }
+        },
+    );
+    action
+}
+
 /// Sort controls sit on `header_bg`. A system-themed button can be the same
 /// color as the label (light-on-light when macOS is in light mode), so the
 /// chip is shifted away from the label color.
@@ -381,8 +557,7 @@ pub fn draw_panel(
     let panel_side_for_closure = panel_side;
 
     let mut request_raw_reload = false;
-    let mut tab_clicked: Option<usize> = None;
-    let mut tab_close_clicked: Option<usize> = None;
+    let mut tab_action: Option<(usize, TabPress)> = None;
     let panel_response = ui
         .push_id("browser_panel", |ui| {
             egui::Frame::NONE
@@ -402,61 +577,13 @@ pub fn draw_panel(
                         let footer_height = 24.0;
                         let spacing = ui.spacing().item_spacing.y;
 
-                        // Draw tab bar when multiple tabs exist
                         if app.panel(panel_side).tabs.len() > 1 {
-                            let tab_count = app.panel(panel_side).tabs.len();
                             let active_tab_idx = app.panel(panel_side).active_tab;
-                            ui.allocate_ui_with_layout(
-                                egui::Vec2::new(ui.available_width(), 22.0),
-                                egui::Layout::left_to_right(egui::Align::Center),
-                                |ui| {
-                                    for i in 0..tab_count {
-                                        let is_active_tab = i == active_tab_idx;
-                                        let tab_bg = if is_active_tab {
-                                            colors.header_bg
-                                        } else {
-                                            colors.footer_bg
-                                        };
-                                        let tab_fg = if is_active_tab {
-                                            colors.header_fg
-                                        } else {
-                                            colors.row_fg_inactive
-                                        };
-                                        let label = {
-                                            let browser = &app.panel(panel_side).tabs[i];
-                                            browser
-                                                .current_path
-                                                .file_name()
-                                                .and_then(|n| n.to_str())
-                                                .unwrap_or("/")
-                                                .to_string()
-                                        };
-                                        let resp = egui::Frame::NONE
-                                            .fill(color32(tab_bg))
-                                            .corner_radius(egui::CornerRadius {
-                                                nw: 4,
-                                                ne: 4,
-                                                sw: 0,
-                                                se: 0,
-                                            })
-                                            .inner_margin(egui::Margin::symmetric(6, 2))
-                                            .show(ui, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    ui.colored_label(color32(tab_fg), &label);
-                                                    let x_resp = ui.colored_label(
-                                                        color32(tab_fg),
-                                                        egui::RichText::new("×").small(),
-                                                    );
-                                                    if x_resp.clicked() {
-                                                        tab_close_clicked = Some(i);
-                                                    }
-                                                });
-                                            });
-                                        if resp.response.clicked() {
-                                            tab_clicked = Some(i);
-                                        }
-                                    }
-                                },
+                            tab_action = draw_tab_bar(
+                                ui,
+                                &app.panel(panel_side).tabs,
+                                active_tab_idx,
+                                &colors,
                             );
                         }
 
@@ -1219,21 +1346,17 @@ pub fn draw_panel(
         }
     }
 
-    // Handle tab close before tab switch (close may affect indices)
-    if let Some(i) = tab_close_clicked {
+    if let Some((index, press)) = tab_action {
         app.active_panel = panel_side;
-        let panel = app.panel_mut(panel_side);
-        if panel.tabs.len() > 1 {
-            panel.tabs.remove(i);
-            if panel.active_tab >= panel.tabs.len() {
-                panel.active_tab = panel.tabs.len() - 1;
-            } else if panel.active_tab > i {
-                panel.active_tab -= 1;
+        match press {
+            TabPress::Close => crate::close_browser_tab(app, panel_side, index),
+            TabPress::Select => {
+                let panel = app.panel_mut(panel_side);
+                if index < panel.tabs.len() {
+                    panel.active_tab = index;
+                }
             }
         }
-    } else if let Some(i) = tab_clicked {
-        app.active_panel = panel_side;
-        app.panel_mut(panel_side).active_tab = i;
     }
 
     rows
@@ -1312,5 +1435,83 @@ mod tests {
             list_scroll_target(ScrollMode::ForceActive, 3, ROW, ROW * 4.0, LIST),
             Some(0.0)
         );
+    }
+
+    fn browser() -> app_state::BrowserState {
+        app_state::BrowserState {
+            browser_mode: core::BrowserMode::Fs,
+            current_path: std::path::PathBuf::from("/tmp/Downloads"),
+            selected_index: 0,
+            entries: Vec::new(),
+            load: app_state::LoadState::Idle,
+            progress_override: None,
+            prefer_select_name: None,
+            top_index: 0,
+            container_root: None,
+            dir_token: 0,
+            history_back: Vec::new(),
+            history_forward: Vec::new(),
+            inline_rename: None,
+            sort_mode: core::SortMode::Name,
+            sort_desc: false,
+            watching_archive: None,
+            index_last_seen: 0,
+            marked: std::collections::HashSet::new(),
+            parent_cache: Vec::new(),
+            listing_mtime: None,
+            folder_narrow: None,
+        }
+    }
+
+    fn pointer_input(pos: egui::Pos2, button: Option<bool>, time: f64) -> egui::RawInput {
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(400.0, 80.0),
+            )),
+            time: Some(time),
+            ..Default::default()
+        };
+        input.events.push(egui::Event::PointerMoved(pos));
+        if let Some(pressed) = button {
+            input.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::default(),
+            });
+        }
+        input
+    }
+
+    /// Draw the tab and report what a click at `pos` does. `None` hovers the
+    /// center after the first layout, which is enough to learn the tab rect.
+    fn click_tab(pos: Option<egui::Pos2>) -> (egui::Rect, Option<TabPress>) {
+        let ctx = egui::Context::default();
+        let colors = theme::Theme::dark().colors();
+        let browser = browser();
+        let draw = |input: egui::RawInput| {
+            let mut rect = egui::Rect::ZERO;
+            let mut hit = None;
+            let _ = ctx.run_ui(input, |ui| {
+                hit = tab_button(ui, 0, &browser, true, &colors, 160.0);
+                rect = ui.min_rect();
+            });
+            (rect, hit)
+        };
+        let (rect, _) = draw(pointer_input(egui::Pos2::ZERO, None, 0.0));
+        let pos = pos.unwrap_or(rect.center());
+        let _ = draw(pointer_input(pos, Some(true), 0.1));
+        draw(pointer_input(pos, Some(false), 0.2))
+    }
+
+    #[test]
+    fn clicking_the_name_selects_and_the_x_closes() {
+        let (rect, _) = click_tab(None);
+        assert!(rect.width() > 32.0, "tab should lay out");
+        let name = egui::pos2(rect.left() + 10.0, rect.center().y);
+        assert!(matches!(click_tab(Some(name)).1, Some(TabPress::Select)));
+        let close = egui::pos2(rect.right() - 14.0, rect.center().y);
+        assert!(matches!(click_tab(Some(close)).1, Some(TabPress::Close)));
     }
 }

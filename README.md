@@ -54,7 +54,7 @@ xattr -dr com.apple.quarantine /Applications/FileMan.app
 | Alt+Left / Alt+Right | Back / forward |
 | Backspace / Ctrl+PgUp | Parent folder |
 | Ctrl+PgDn | Open selected |
-| Ctrl+Left / Ctrl+Right | Open selected dir in other panel |
+| Ctrl+Left / Ctrl+Right | Open selected dir in other panel. On macOS, ⌘+Left / ⌘+Right does the same; Control+Arrow switches Spaces |
 | F1 | Help |
 | F2 / Ctrl+R | Refresh |
 | F3 | Preview |

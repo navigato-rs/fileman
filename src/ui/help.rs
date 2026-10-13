@@ -28,7 +28,14 @@ pub fn draw_help(
             ("Alt+Left / Alt+Right", "Back / forward"),
             ("Backspace / Ctrl+PgUp", "Parent folder"),
             ("Ctrl+PgDn", "Open selected"),
-            ("Ctrl+Left / Ctrl+Right", "Open selected dir in other panel"),
+            (
+                if cfg!(target_os = "macos") {
+                    "⌘/Ctrl+Left / ⌘/Ctrl+Right"
+                } else {
+                    "Ctrl+Left / Ctrl+Right"
+                },
+                "Open selected dir in other panel",
+            ),
             ("F3 / Ctrl+P", "Preview"),
             ("F4 / Ctrl+E", "Edit"),
             ("Shift+F4 / Ctrl+N", "New file"),

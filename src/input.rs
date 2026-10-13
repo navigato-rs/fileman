@@ -1056,11 +1056,13 @@ pub(crate) fn handle_keyboard(
             }
         }
     }
-    let ctrl_left = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::ArrowLeft));
+    // macOS reserves Control+Left/Right for switching Spaces, so that chord
+    // never arrives. ⌘+Left/Right does. `COMMAND` is ⌘ there and Ctrl elsewhere.
+    let ctrl_left = consume_ctrl_or_cmd(ctx, egui::Key::ArrowLeft);
     if ctrl_left && app.active_panel == core::ActivePanel::Right {
         open_selected_from_to(app, core::ActivePanel::Right, core::ActivePanel::Left);
     }
-    let ctrl_right = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::ArrowRight));
+    let ctrl_right = consume_ctrl_or_cmd(ctx, egui::Key::ArrowRight);
     if ctrl_right && app.active_panel == core::ActivePanel::Left {
         open_selected_from_to(app, core::ActivePanel::Left, core::ActivePanel::Right);
     }
@@ -1410,6 +1412,18 @@ pub(crate) fn handle_keyboard(
         app.prepare_delete_selected();
         ctx.request_repaint();
     }
+}
+
+/// Ctrl on every platform, and ⌘ on macOS.
+///
+/// Try `COMMAND` first. On Linux and Windows a Ctrl press sets both bits, so
+/// the first call consumes it. On macOS the two keys are distinct: ⌘ matches
+/// `COMMAND`, and a physical Control press falls through to `CTRL`.
+fn consume_ctrl_or_cmd(ctx: &egui::Context, key: egui::Key) -> bool {
+    ctx.input_mut(|input| {
+        input.consume_key(egui::Modifiers::COMMAND, key)
+            || input.consume_key(egui::Modifiers::CTRL, key)
+    })
 }
 
 fn open_parent(app: &mut app_state::AppState, window_rows: usize) {
@@ -1832,6 +1846,49 @@ mod tests {
             path: "/home/projects".into(),
         };
         assert_eq!(remote_ascend_name(&mode).as_deref(), Some("projects"));
+    }
+
+    fn press(modifiers: egui::Modifiers, key: egui::Key) -> bool {
+        let ctx = egui::Context::default();
+        let mut hit = false;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: Some(key),
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::Vec2::new(800.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                hit = super::consume_ctrl_or_cmd(ui.ctx(), key);
+            },
+        );
+        hit
+    }
+
+    #[test]
+    fn command_or_ctrl_opens_with_either_modifier() {
+        let mac_cmd = egui::Modifiers {
+            command: true,
+            mac_cmd: true,
+            ..egui::Modifiers::NONE
+        };
+        assert!(press(mac_cmd, egui::Key::ArrowRight));
+        assert!(press(egui::Modifiers::CTRL, egui::Key::ArrowLeft));
+        // Linux stamps both bits on a Ctrl press. One chord, one match.
+        assert!(press(
+            egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+            egui::Key::ArrowRight
+        ));
+        assert!(!press(egui::Modifiers::NONE, egui::Key::ArrowLeft));
+        assert!(!press(egui::Modifiers::ALT, egui::Key::ArrowRight));
     }
 
     #[test]

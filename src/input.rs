@@ -441,132 +441,249 @@ fn remote_ascend_name(mode: &core::BrowserMode) -> Option<String> {
     }
 }
 
+fn is_archive_file(entry: &core::DirEntry) -> bool {
+    if entry.is_dir {
+        return false;
+    }
+    match &entry.location {
+        core::EntryLocation::Fs(path) => core::container_kind_from_path(path).is_some(),
+        core::EntryLocation::Remote { path, .. } => {
+            core::container_kind_from_path(Path::new(path)).is_some()
+        }
+        core::EntryLocation::Container { .. } => false,
+    }
+}
+
+enum FolderToShow {
+    Fs {
+        path: PathBuf,
+        prefer_name: Option<String>,
+    },
+    Remote {
+        host: String,
+        path: String,
+        prefer_name: Option<String>,
+    },
+    Container {
+        kind: core::ContainerKind,
+        archive_path: PathBuf,
+        cwd: String,
+        root: Option<String>,
+        prefer_name: Option<String>,
+    },
+}
+
+/// Folder the other panel shows for `..` or a plain file.
+/// A subdirectory or archive returns `None` so the caller opens that entry.
+/// Remote entries use the directory this panel is showing.
+fn current_folder_for_other_panel(
+    entry: &core::DirEntry,
+    mode: &core::BrowserMode,
+    current_path: &Path,
+) -> Option<FolderToShow> {
+    let show_current = entry.name == ".." || (!entry.is_dir && !is_archive_file(entry));
+    if !show_current {
+        return None;
+    }
+    let prefer_name = (entry.name != "..").then(|| entry.name.clone());
+    match mode {
+        core::BrowserMode::Fs => Some(FolderToShow::Fs {
+            path: current_path.to_path_buf(),
+            prefer_name,
+        }),
+        core::BrowserMode::Remote { host, path } => Some(FolderToShow::Remote {
+            host: host.clone(),
+            path: path.clone(),
+            prefer_name,
+        }),
+        core::BrowserMode::Container {
+            kind,
+            archive_path,
+            cwd,
+            root,
+        } => Some(FolderToShow::Container {
+            kind: *kind,
+            archive_path: archive_path.clone(),
+            cwd: cwd.clone(),
+            root: root.clone(),
+            prefer_name,
+        }),
+        core::BrowserMode::Search { .. } => None,
+    }
+}
+
+fn show_folder_in_panel(
+    app: &mut app_state::AppState,
+    folder: FolderToShow,
+    target: core::ActivePanel,
+) {
+    match folder {
+        FolderToShow::Fs { path, prefer_name } => {
+            load_fs_directory_async(app, path, target, prefer_name);
+        }
+        FolderToShow::Remote {
+            host,
+            path,
+            prefer_name,
+        } => {
+            crate::load_sftp_directory_async(app, &host, &path, target, prefer_name);
+        }
+        FolderToShow::Container {
+            kind,
+            archive_path,
+            cwd,
+            root,
+            prefer_name,
+        } => {
+            load_container_directory_async(
+                app,
+                kind,
+                archive_path,
+                cwd,
+                root,
+                target,
+                prefer_name,
+                ContainerLoadMode::UseCache,
+                None,
+                None,
+            );
+        }
+    }
+}
+
 fn open_selected_from_to(
     app: &mut app_state::AppState,
     source: core::ActivePanel,
     target: core::ActivePanel,
 ) {
-    let (selected_entry, current_path, container_cwd) = {
+    let (selected_entry, current_path, source_mode) = {
         let panel = app.panel(source);
         let browser = panel.browser();
         if browser.entries.is_empty() {
             return;
         }
-        let entry = browser.entries[browser.selected_index].clone();
-        let current_path = browser.current_path.clone();
-        let app_state::BrowserState {
-            browser_mode: ref mode,
-            ..
-        } = *browser;
-        let container_cwd = match mode {
-            core::BrowserMode::Container { cwd, .. } => Some(cwd.clone()),
-            _ => None,
-        };
-        (entry, current_path, container_cwd)
+        (
+            browser.entries[browser.selected_index].clone(),
+            browser.current_path.clone(),
+            browser.browser_mode.clone(),
+        )
+    };
+    let container_cwd = match &source_mode {
+        core::BrowserMode::Container { cwd, .. } => Some(cwd.clone()),
+        _ => None,
     };
     let container_root = app.panel(source).browser().container_root.clone();
 
     app.push_history(target);
 
-    match selected_entry.location.clone() {
-        core::EntryLocation::Fs(path) => {
-            if selected_entry.is_dir {
-                // Going up: land on the folder we left. Going in: start fresh.
-                let prefer_name = if selected_entry.name == ".." {
-                    current_path
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                } else {
-                    None
-                };
-                load_fs_directory_async(app, path.clone(), target, prefer_name);
-            } else if let Some(kind) = core::container_kind_from_path(&path) {
-                load_container_directory_async(
-                    app,
-                    kind,
-                    path.clone(),
-                    "".to_string(),
-                    None,
-                    target,
-                    None,
-                    ContainerLoadMode::UseCache,
-                    None,
-                    None,
-                );
-            }
-        }
-        core::EntryLocation::Container {
-            kind,
-            archive_path,
-            inner_path,
-        } => {
-            if selected_entry.is_dir {
-                let prefer_name = if selected_entry.name == ".." {
-                    container_cwd.as_ref().and_then(|cwd| {
-                        cwd.trim_end_matches('/')
-                            .rsplit('/')
-                            .next()
-                            .map(|s| s.to_string())
-                    })
-                } else {
-                    None
-                };
-                let root_hint = container_root.clone();
-                let mut effective_cwd = inner_path.clone();
-                if let Some(ref root) = root_hint {
-                    let root_prefix = format!("{}/", root.trim_end_matches('/'));
-                    if effective_cwd == *root {
-                        effective_cwd.clear();
-                    } else if effective_cwd.starts_with(&root_prefix) {
-                        effective_cwd = effective_cwd[root_prefix.len()..].to_string();
-                    }
+    // `..` and a plain file show this folder on the other panel.
+    if source != target
+        && let Some(folder) =
+            current_folder_for_other_panel(&selected_entry, &source_mode, &current_path)
+    {
+        show_folder_in_panel(app, folder, target);
+    } else {
+        match selected_entry.location.clone() {
+            core::EntryLocation::Fs(path) => {
+                if selected_entry.is_dir {
+                    // Going up: land on the folder we left. Going in: start fresh.
+                    let prefer_name = if selected_entry.name == ".." {
+                        current_path
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                    } else {
+                        None
+                    };
+                    load_fs_directory_async(app, path.clone(), target, prefer_name);
+                } else if let Some(kind) = core::container_kind_from_path(&path) {
+                    load_container_directory_async(
+                        app,
+                        kind,
+                        path.clone(),
+                        "".to_string(),
+                        None,
+                        target,
+                        None,
+                        ContainerLoadMode::UseCache,
+                        None,
+                        None,
+                    );
                 }
-                load_container_directory_async(
-                    app,
-                    kind,
-                    archive_path.clone(),
-                    effective_cwd,
-                    root_hint,
-                    target,
-                    prefer_name,
-                    ContainerLoadMode::UseCache,
-                    None,
-                    None,
-                );
             }
-        }
-        core::EntryLocation::Remote { host, path } => {
-            if selected_entry.is_dir {
-                let prefer_name = if selected_entry.name == ".." {
-                    let browser = app.panel(source).browser();
-                    remote_ascend_name(&browser.browser_mode)
-                } else {
-                    None
-                };
-                crate::load_sftp_directory_async(app, &host, &path, target, prefer_name);
-            } else if let Some(kind) = core::container_kind_from_path(std::path::Path::new(&path)) {
-                // Navigate into the remote archive as a container, using a
-                // synthetic archive path so the whole container stack can work
-                // unchanged. The archive reader streams via SFTP.
-                let synthetic = fileman::sftp::encode_archive_path(&host, &path);
-                let return_dir = path
-                    .trim_end_matches('/')
-                    .rsplit_once('/')
-                    .map(|(parent, _)| parent.to_string())
-                    .unwrap_or_else(|| "/".to_string());
-                let known_mtime = selected_entry.modified.map(crate::unix_secs_to_system_time);
-                load_container_directory_async(
-                    app,
-                    kind,
-                    synthetic,
-                    "".to_string(),
-                    None,
-                    target,
-                    None,
-                    ContainerLoadMode::UseCache,
-                    Some((host, return_dir)),
-                    known_mtime,
-                );
+            core::EntryLocation::Container {
+                kind,
+                archive_path,
+                inner_path,
+            } => {
+                if selected_entry.is_dir {
+                    let prefer_name = if selected_entry.name == ".." {
+                        container_cwd.as_ref().and_then(|cwd| {
+                            cwd.trim_end_matches('/')
+                                .rsplit('/')
+                                .next()
+                                .map(|s| s.to_string())
+                        })
+                    } else {
+                        None
+                    };
+                    let root_hint = container_root.clone();
+                    let mut effective_cwd = inner_path.clone();
+                    if let Some(ref root) = root_hint {
+                        let root_prefix = format!("{}/", root.trim_end_matches('/'));
+                        if effective_cwd == *root {
+                            effective_cwd.clear();
+                        } else if effective_cwd.starts_with(&root_prefix) {
+                            effective_cwd = effective_cwd[root_prefix.len()..].to_string();
+                        }
+                    }
+                    load_container_directory_async(
+                        app,
+                        kind,
+                        archive_path.clone(),
+                        effective_cwd,
+                        root_hint,
+                        target,
+                        prefer_name,
+                        ContainerLoadMode::UseCache,
+                        None,
+                        None,
+                    );
+                }
+            }
+            core::EntryLocation::Remote { host, path } => {
+                if selected_entry.is_dir {
+                    let prefer_name = if selected_entry.name == ".." {
+                        remote_ascend_name(&source_mode)
+                    } else {
+                        None
+                    };
+                    crate::load_sftp_directory_async(app, &host, &path, target, prefer_name);
+                } else if let Some(kind) =
+                    core::container_kind_from_path(std::path::Path::new(&path))
+                {
+                    // Navigate into the remote archive as a container, using a
+                    // synthetic archive path so the whole container stack can work
+                    // unchanged. The archive reader streams via SFTP.
+                    let synthetic = fileman::sftp::encode_archive_path(&host, &path);
+                    let return_dir = path
+                        .trim_end_matches('/')
+                        .rsplit_once('/')
+                        .map(|(parent, _)| parent.to_string())
+                        .unwrap_or_else(|| "/".to_string());
+                    let known_mtime = selected_entry.modified.map(crate::unix_secs_to_system_time);
+                    load_container_directory_async(
+                        app,
+                        kind,
+                        synthetic,
+                        "".to_string(),
+                        None,
+                        target,
+                        None,
+                        ContainerLoadMode::UseCache,
+                        Some((host, return_dir)),
+                        known_mtime,
+                    );
+                }
             }
         }
     }
@@ -1837,7 +1954,87 @@ mod tests {
 
     use fileman::core;
 
-    use super::remote_ascend_name;
+    use super::{FolderToShow, current_folder_for_other_panel, remote_ascend_name};
+
+    fn entry(name: &str, is_dir: bool, location: core::EntryLocation) -> core::DirEntry {
+        core::DirEntry {
+            name: name.to_string(),
+            is_dir,
+            is_symlink: false,
+            link_target: None,
+            location,
+            size: None,
+            modified: None,
+        }
+    }
+
+    #[test]
+    fn other_panel_shows_the_current_remote_folder_for_a_file_or_dotdot() {
+        let mode = core::BrowserMode::Remote {
+            host: "alpha".into(),
+            path: "/var/log".into(),
+        };
+        let current = PathBuf::from("/sftp/alpha/var/log");
+        let file = entry(
+            "syslog",
+            false,
+            core::EntryLocation::Remote {
+                host: "alpha".into(),
+                path: "/var/log/syslog".into(),
+            },
+        );
+        let Some(FolderToShow::Remote {
+            host,
+            path,
+            prefer_name,
+        }) = current_folder_for_other_panel(&file, &mode, &current)
+        else {
+            panic!("a file should show the folder on screen");
+        };
+        assert_eq!(host, "alpha");
+        assert_eq!(path, "/var/log");
+        assert_eq!(prefer_name.as_deref(), Some("syslog"));
+
+        let parent = entry(
+            "..",
+            true,
+            core::EntryLocation::Remote {
+                host: "alpha".into(),
+                path: "/var".into(),
+            },
+        );
+        let Some(FolderToShow::Remote {
+            host,
+            path,
+            prefer_name,
+        }) = current_folder_for_other_panel(&parent, &mode, &current)
+        else {
+            panic!(".. should show the folder on screen");
+        };
+        assert_eq!(host, "alpha");
+        assert_eq!(path, "/var/log");
+        assert!(prefer_name.is_none());
+
+        let child = entry(
+            "nginx",
+            true,
+            core::EntryLocation::Remote {
+                host: "alpha".into(),
+                path: "/var/log/nginx".into(),
+            },
+        );
+        assert!(current_folder_for_other_panel(&child, &mode, &current).is_none());
+
+        let archive = entry(
+            "pack.zip",
+            false,
+            core::EntryLocation::Remote {
+                host: "alpha".into(),
+                path: "/var/log/pack.zip".into(),
+            },
+        );
+        assert!(current_folder_for_other_panel(&archive, &mode, &current).is_none());
+    }
 
     #[test]
     fn leaving_a_remote_directory_selects_that_directory() {

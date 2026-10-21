@@ -15,6 +15,7 @@
 - Go To opens a path on the current remote, and `host:/path` on any host
 - Click a panel tab to select it, and its × to close it
 - ⌘+Left / ⌘+Right opens the selected directory in the other panel on macOS, where Control+Arrow switches Spaces
+- Go To a file path opens that file's folder and selects the file
 
 ## v0.4.0 (5 Sep 2026)
 

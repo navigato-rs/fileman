@@ -74,7 +74,7 @@ xattr -dr com.apple.quarantine /Applications/FileMan.app
 | Insert / Ctrl+I | Mark / unmark |
 | Space | Compute folder size |
 | Alt+Enter | Properties |
-| Ctrl+G | Quick jump |
+| Ctrl+G | Quick jump to a folder or file |
 | Ctrl+Shift+C | Copy path to clipboard |
 | Ctrl+, | Settings |
 

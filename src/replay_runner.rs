@@ -498,6 +498,7 @@ fn init_headless_app(root: Option<PathBuf>) -> anyhow::Result<app_state::AppStat
         sftp_connect_rx: None,
         sftp_pending_nav: None,
         sftp_nav_queue: std::collections::VecDeque::new(),
+        sftp_reveal_rx: None,
     };
     app.theme
         .load_external_from_dir(std::path::Path::new("./themes"));

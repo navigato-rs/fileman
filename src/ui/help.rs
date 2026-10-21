@@ -34,7 +34,7 @@ pub fn draw_help(
                 } else {
                     "Ctrl+Left / Ctrl+Right"
                 },
-                "Open selected dir in other panel",
+                "Show selected dir, or this folder, in the other panel",
             ),
             ("F3 / Ctrl+P", "Preview"),
             ("F4 / Ctrl+E", "Edit"),

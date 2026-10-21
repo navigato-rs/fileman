@@ -850,11 +850,22 @@ pub fn draw_panel(
                             egui::Vec2::new(ui.available_width(), list_height),
                             egui::Layout::top_down(egui::Align::LEFT),
                             |ui| {
+                                // A new directory gets a new scroll id, so the inactive
+                                // panel starts at the top. Selection changes keep
+                                // the path, and the list is not yanked.
+                                let list_path = app
+                                    .panel(panel_side_for_closure)
+                                    .browser()
+                                    .current_path
+                                    .clone();
                                 let mut scroll = egui::ScrollArea::vertical()
-                                    .id_salt(match panel_side_for_closure {
-                                        core::ActivePanel::Left => "left_list",
-                                        core::ActivePanel::Right => "right_list",
-                                    })
+                                    .id_salt((
+                                        match panel_side_for_closure {
+                                            core::ActivePanel::Left => "left_list",
+                                            core::ActivePanel::Right => "right_list",
+                                        },
+                                        list_path,
+                                    ))
                                     .auto_shrink([false, false]);
                                 if let Some(offset) = scroll_target {
                                     scroll = scroll.vertical_scroll_offset(offset);

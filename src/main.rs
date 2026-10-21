@@ -1362,7 +1362,7 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
         }
         // Automatically reconnect panels that had stale sessions.
         for (side, host, path) in reconnect_panels {
-            navigate_sftp(app, &host, &path, side);
+            navigate_sftp(app, &host, &path, side, app_state::SftpNavIntent::Directory);
         }
     }
 
@@ -1544,14 +1544,20 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
                 if let Some(old) = old {
                     std::thread::spawn(move || drop(old));
                 }
-                if let Some((nav_host, nav_path, nav_panel)) = app.sftp_pending_nav.take()
-                    && nav_host == host_key
+                if let Some(nav) = app.sftp_pending_nav.take()
+                    && nav.host == host_key
                 {
-                    load_sftp_directory_async(app, &nav_host, &nav_path, nav_panel, None);
+                    let app_state::SftpNav {
+                        host,
+                        path,
+                        panel,
+                        intent,
+                    } = nav;
+                    navigate_sftp(app, &host, &path, panel, intent);
                 }
                 // Start the next queued connection if any
-                if let Some((next_host, next_path, next_panel)) = app.sftp_nav_queue.pop_front() {
-                    navigate_sftp(app, &next_host, &next_path, next_panel);
+                if let Some(nav) = app.sftp_nav_queue.pop_front() {
+                    navigate_sftp(app, &nav.host, &nav.path, nav.panel, nav.intent);
                 }
             }
             Err(msg) => {
@@ -1561,22 +1567,41 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
                 // panel is still showing that remote host, the reconnect just
                 // failed for real — surface the error in the panel now. A failed
                 // fresh connect from a local view only needs the log entry.
-                if let Some((fail_host, _path, panel)) = pending {
-                    let browser = app.panel_mut(panel).browser_mut();
+                if let Some(nav) = pending {
+                    let browser = app.panel_mut(nav.panel).browser_mut();
                     if matches!(
                         &browser.browser_mode,
-                        core::BrowserMode::Remote { host, .. } if *host == fail_host
+                        core::BrowserMode::Remote { host, .. } if *host == nav.host
                     ) {
                         apply_dir_batch(browser, core::DirBatch::Error(msg));
                     }
                 }
                 // Continue with next queued navigation despite error
-                if let Some((next_host, next_path, next_panel)) = app.sftp_nav_queue.pop_front() {
-                    navigate_sftp(app, &next_host, &next_path, next_panel);
+                if let Some(nav) = app.sftp_nav_queue.pop_front() {
+                    navigate_sftp(app, &nav.host, &nav.path, nav.panel, nav.intent);
                 }
             }
         }
         changed = true;
+    }
+
+    if let Some(rx) = app.sftp_reveal_rx.take() {
+        match rx.try_recv() {
+            Ok(reveal) => {
+                load_sftp_directory_async(
+                    app,
+                    &reveal.host,
+                    &reveal.directory,
+                    reveal.panel,
+                    reveal.file_name,
+                );
+                changed = true;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                app.sftp_reveal_rx = Some(rx);
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {}
+        }
     }
 
     while let Ok(result) = app.edit_rx.try_recv() {
@@ -1861,7 +1886,14 @@ fn navigate_quick_jump(
 ) {
     if result.category == app_state::QuickJumpCategory::Ssh {
         let host = result.path.to_string_lossy().to_string();
-        navigate_sftp(app, &host, "/", target_panel);
+        app.search_ui = app_state::SearchUiState::Closed;
+        navigate_sftp(
+            app,
+            &host,
+            "/",
+            target_panel,
+            app_state::SftpNavIntent::Directory,
+        );
         return;
     }
     if result.category == app_state::QuickJumpCategory::Remote {
@@ -1876,12 +1908,86 @@ fn navigate_quick_jump(
             }
         };
         let remote_path = result.path.to_string_lossy().to_string();
-        load_sftp_directory_async(app, &host, &remote_path, target_panel, None);
+        app.search_ui = app_state::SearchUiState::Closed;
+        navigate_sftp(
+            app,
+            &host,
+            &remote_path,
+            target_panel,
+            app_state::SftpNavIntent::RevealFile,
+        );
         return;
     }
-    if result.path.is_dir() {
-        load_fs_directory_async(app, result.path, target_panel, None);
+    if let Some((dir, name)) = local_goto_target(&result.path) {
+        app.search_ui = app_state::SearchUiState::Closed;
+        load_fs_directory_async(app, dir, target_panel, name);
     }
+}
+
+/// A directory opens itself. A file (or a symlink to one) opens its folder
+/// with that name selected. A path that does not exist is left alone.
+fn local_goto_target(path: &Path) -> Option<(PathBuf, Option<String>)> {
+    if path.is_dir() {
+        return Some((path.to_path_buf(), None));
+    }
+    if path.symlink_metadata().is_err() {
+        return None;
+    }
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    if name.is_empty() {
+        return None;
+    }
+    let parent = path.parent()?;
+    let parent = if parent.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        parent.to_path_buf()
+    };
+    parent.is_dir().then_some((parent, Some(name)))
+}
+
+/// Parent directory and final component of a remote file path.
+fn remote_file_location(path: &str) -> Option<(String, String)> {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return None;
+    }
+    let name = trimmed.rsplit('/').next()?;
+    if name.is_empty() {
+        return None;
+    }
+    Some((remote_parent(trimmed), name.to_string()))
+}
+
+enum RemotePathKind {
+    Directory,
+    File,
+}
+
+/// `None` means the stat failed or omitted a file type, so the path is listed
+/// as given and a failure stays visible. Only a confirmed file opens its folder.
+fn sftp_reveal_target(path: &str, kind: Option<RemotePathKind>) -> (String, Option<String>) {
+    if let Some(RemotePathKind::File) = kind
+        && let Some((dir, name)) = remote_file_location(path)
+    {
+        return (dir, Some(name));
+    }
+    (path.to_string(), None)
+}
+
+/// Select `prefer_name` when it is already on screen. Otherwise keep it for
+/// the listing that is about to arrive. An unchanged refresh skips that
+/// listing, so a hit here must not stay pending or the cursor jumps back later.
+fn assign_prefer_name(browser: &mut app_state::BrowserState, prefer_name: Option<String>) {
+    if let Some(ref name) = prefer_name
+        && let Some(idx) = browser.entries.iter().position(|entry| entry.name == *name)
+    {
+        browser.selected_index = idx;
+        browser.top_index = idx.saturating_sub(5);
+        browser.prefer_select_name = None;
+        return;
+    }
+    browser.prefer_select_name = prefer_name;
 }
 
 fn navigate_sftp(
@@ -1889,19 +1995,35 @@ fn navigate_sftp(
     host: &str,
     remote_path: &str,
     target_panel: core::ActivePanel,
+    intent: app_state::SftpNavIntent,
 ) {
     if host.is_empty() {
         return;
     }
+    // A directory connect must not lose to a file stat still in flight.
+    // RevealFile replaces this receiver below.
+    app.sftp_reveal_rx = None;
     // Already connected — load directory directly
     if app.sftp_sessions.contains_key(host) {
-        load_sftp_directory_async(app, host, remote_path, target_panel, None);
+        match intent {
+            app_state::SftpNavIntent::Directory => {
+                load_sftp_directory_async(app, host, remote_path, target_panel, None);
+            }
+            app_state::SftpNavIntent::RevealFile => {
+                reveal_sftp_file(app, host, remote_path, target_panel);
+            }
+        }
         return;
     }
+    let nav = app_state::SftpNav {
+        host: host.to_string(),
+        path: remote_path.to_string(),
+        panel: target_panel,
+        intent,
+    };
     // If another connection is already in progress, queue this one
     if app.sftp_connecting().is_some() {
-        app.sftp_nav_queue
-            .push_back((host.to_string(), remote_path.to_string(), target_panel));
+        app.sftp_nav_queue.push_back(nav);
         return;
     }
     // Spawn SFTP connection in a background thread
@@ -1917,7 +2039,45 @@ fn navigate_sftp(
     });
     app.open_modal(app_state::Modal::Connecting(host.to_string()));
     app.sftp_connect_rx = Some(rx);
-    app.sftp_pending_nav = Some((host.to_string(), remote_path.to_string(), target_panel));
+    app.sftp_pending_nav = Some(nav);
+}
+
+/// Stat `remote_path` off the UI thread. A file opens its folder with that
+/// file selected; a directory is listed as itself.
+fn reveal_sftp_file(
+    app: &mut app_state::AppState,
+    host: &str,
+    remote_path: &str,
+    panel: core::ActivePanel,
+) {
+    let Some(session) = app.sftp_sessions.get(host).map(Arc::clone) else {
+        return;
+    };
+    let requested = remote_path.to_string();
+    let host_owned = host.to_string();
+    let (tx, rx) = mpsc::channel();
+    let wake = app.wake.clone();
+    thread::spawn(move || {
+        let locked = session.lock().unwrap_or_else(|poison| poison.into_inner());
+        let path = fileman::sftp::canonicalize_remote_path(&requested, locked.home_dir.as_deref());
+        let kind = match locked.sftp.stat(&path) {
+            Ok(attrs) if attrs.is_dir() => Some(RemotePathKind::Directory),
+            Ok(attrs) if attrs.permissions.is_some() => Some(RemotePathKind::File),
+            _ => None,
+        };
+        drop(locked);
+        let (directory, file_name) = sftp_reveal_target(&path, kind);
+        let _ = tx.send(app_state::SftpReveal {
+            host: host_owned,
+            panel,
+            directory,
+            file_name,
+        });
+        if let Some(ref wake) = wake {
+            wake();
+        }
+    });
+    app.sftp_reveal_rx = Some(rx);
 }
 
 fn load_sftp_directory_async(
@@ -1927,10 +2087,18 @@ fn load_sftp_directory_async(
     target_panel: core::ActivePanel,
     prefer_name: Option<String>,
 ) {
+    // A newer listing wins over a Go To stat that has not finished yet.
+    app.sftp_reveal_rx = None;
     let session = match app.sftp_sessions.get(host) {
         Some(s) => Arc::clone(s),
         None => {
-            navigate_sftp(app, host, remote_path, target_panel);
+            navigate_sftp(
+                app,
+                host,
+                remote_path,
+                target_panel,
+                app_state::SftpNavIntent::Directory,
+            );
             return;
         }
     };
@@ -2061,10 +2229,13 @@ fn load_sftp_directory_async(
         browser.selected_index = 0;
         browser.top_index = 0;
         browser.listing_mtime = None;
+        browser.folder_narrow = None;
+    } else {
+        let _ = lift_folder_narrow(browser);
     }
     browser.dir_token = browser.dir_token.wrapping_add(1);
     browser.load = app_state::LoadState::start(rx, browser.dir_token);
-    browser.prefer_select_name = prefer_name;
+    assign_prefer_name(browser, prefer_name);
     browser.container_root = None;
     browser.watching_archive = None;
     browser.progress_override = None;
@@ -2150,6 +2321,7 @@ fn load_fs_directory_async(
     target_panel: core::ActivePanel,
     prefer_name: Option<String>,
 ) {
+    app.sftp_reveal_rx = None;
     let same_dir = app.panel(target_panel).browser().current_path == path;
     let mut initial: Vec<core::DirEntry> = Vec::new();
     let mut has_parent_entry = false;
@@ -2462,7 +2634,6 @@ fn load_fs_directory_async(
         });
     }
 
-    let remembered = prefer_name.clone();
     let panel_state = app.panel_mut(target_panel);
     let browser = panel_state.browser_mut();
     let initial_loading = initial.is_empty() || has_parent_entry;
@@ -2471,6 +2642,9 @@ fn load_fs_directory_async(
         browser.top_index = 0;
         browser.entries = initial;
         browser.selected_index = 0;
+        browser.folder_narrow = None;
+    } else {
+        let _ = lift_folder_narrow(browser);
     }
     browser.current_path = path.clone();
     browser.browser_mode = core::BrowserMode::Fs;
@@ -2483,7 +2657,7 @@ fn load_fs_directory_async(
         drop(rx);
         app_state::LoadState::Idle
     };
-    browser.prefer_select_name = remembered;
+    assign_prefer_name(browser, prefer_name);
     browser.watching_archive = None;
     browser.index_last_seen = 0;
     browser.progress_override = None;
@@ -4875,6 +5049,7 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             sftp_connect_rx: None,
             sftp_pending_nav: None,
             sftp_nav_queue: std::collections::VecDeque::new(),
+            sftp_reveal_rx: None,
         };
 
         app.theme
@@ -4887,7 +5062,13 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             (right_start, core::ActivePanel::Right, right_local),
         ] {
             match path_str.as_deref().and_then(parse_remote_path) {
-                Some((host, rpath)) => navigate_sftp(&mut app, &host, &rpath, panel),
+                Some((host, rpath)) => navigate_sftp(
+                    &mut app,
+                    &host,
+                    &rpath,
+                    panel,
+                    app_state::SftpNavIntent::Directory,
+                ),
                 None => load_fs_directory_async(&mut app, local_path, panel, None),
             }
         }
@@ -6194,5 +6375,62 @@ mod tests {
                 .any(|e| e.name == "permission denied")
         );
         assert!(!browser.entries.iter().any(|e| e.name == "a.txt"));
+    }
+
+    #[test]
+    fn goto_file_opens_its_folder_and_selects_the_name() {
+        assert_eq!(
+            remote_file_location("/var/log/syslog").unwrap(),
+            ("/var/log".to_string(), "syslog".to_string())
+        );
+        assert_eq!(
+            remote_file_location("/syslog").unwrap(),
+            ("/".to_string(), "syslog".to_string())
+        );
+        assert!(remote_file_location("/").is_none());
+
+        assert_eq!(
+            sftp_reveal_target("/var/log/syslog", Some(RemotePathKind::File)),
+            ("/var/log".to_string(), Some("syslog".to_string()))
+        );
+        assert_eq!(
+            sftp_reveal_target("/var/log", Some(RemotePathKind::Directory)),
+            ("/var/log".to_string(), None)
+        );
+        // A failed stat lists the path so the error stays visible.
+        assert_eq!(
+            sftp_reveal_target("/var/log/syslog", None),
+            ("/var/log/syslog".to_string(), None)
+        );
+
+        let dir = std::env::temp_dir().join(format!("fileman-goto-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("note.txt");
+        fs::write(&file, b"x").unwrap();
+        let (parent, name) = local_goto_target(&file).unwrap();
+        assert_eq!(parent, dir);
+        assert_eq!(name.as_deref(), Some("note.txt"));
+        let (parent, name) = local_goto_target(&dir).unwrap();
+        assert_eq!(parent, dir);
+        assert!(name.is_none());
+        assert!(local_goto_target(&dir.join("missing.txt")).is_none());
+        #[cfg(unix)]
+        {
+            let link = dir.join("broken");
+            std::os::unix::fs::symlink("missing-target", &link).unwrap();
+            let (parent, name) = local_goto_target(&link).unwrap();
+            assert_eq!(parent, dir);
+            assert_eq!(name.as_deref(), Some("broken"));
+        }
+        let _ = fs::remove_dir_all(&dir);
+
+        let mut browser = remote_browser(&["..", "a.txt", "b.txt"]);
+        browser.selected_index = 0;
+        assign_prefer_name(&mut browser, Some("b.txt".to_string()));
+        assert_eq!(browser.entries[browser.selected_index].name, "b.txt");
+        assert!(browser.prefer_select_name.is_none());
+        assign_prefer_name(&mut browser, Some("later.txt".to_string()));
+        assert_eq!(browser.prefer_select_name.as_deref(), Some("later.txt"));
     }
 }

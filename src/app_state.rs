@@ -542,6 +542,33 @@ pub enum Modal {
     ThemePicker,
 }
 
+/// What to open once an SFTP session exists.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SftpNavIntent {
+    /// List `path` as a directory.
+    Directory,
+    /// Stat `path`. A file opens its folder with that file selected.
+    RevealFile,
+}
+
+/// A remote navigation waiting on a connection, or queued behind one.
+#[derive(Clone)]
+pub struct SftpNav {
+    pub host: String,
+    pub path: String,
+    pub panel: ActivePanel,
+    pub intent: SftpNavIntent,
+}
+
+/// Where a revealed remote path should land. `file_name` is set when `path`
+/// was a file; the listing is then the file's folder.
+pub struct SftpReveal {
+    pub host: String,
+    pub panel: ActivePanel,
+    pub directory: String,
+    pub file_name: Option<String>,
+}
+
 pub struct AppState {
     pub left_panel: PanelState,
     pub right_panel: PanelState,
@@ -628,9 +655,11 @@ pub struct AppState {
     /// Receives the result of an async SFTP connection.
     pub sftp_connect_rx: Option<mpsc::Receiver<Result<crate::sftp::SftpSession, String>>>,
     /// Pending navigation after SFTP connect completes.
-    pub sftp_pending_nav: Option<(String, String, crate::core::ActivePanel)>, // (host, path, panel)
+    pub sftp_pending_nav: Option<SftpNav>,
     /// Queued navigations waiting for prior SFTP connection to finish.
-    pub sftp_nav_queue: std::collections::VecDeque<(String, String, crate::core::ActivePanel)>,
+    pub sftp_nav_queue: std::collections::VecDeque<SftpNav>,
+    /// In-flight stat that decides whether a Go To path is a file or a directory.
+    pub sftp_reveal_rx: Option<mpsc::Receiver<SftpReveal>>,
 }
 
 #[derive(Clone)]

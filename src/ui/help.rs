@@ -55,7 +55,7 @@ pub fn draw_help(
             ("Ctrl+F", "Find in preview"),
             ("Alt+Enter", "Properties"),
             ("F2 / Ctrl+R", "Refresh"),
-            ("Ctrl+G", "Quick jump"),
+            ("Ctrl+G", "Quick jump to a folder or file"),
             ("F9", "Toggle theme"),
             ("F10", "Theme picker"),
             ("F1 / Ctrl+H", "Help"),

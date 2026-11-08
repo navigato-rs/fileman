@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path,
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex, atomic::AtomicU64, mpsc},
     time::Instant,
 };
 
@@ -597,14 +597,23 @@ pub struct AppState {
     pub panel_split: f32,
     /// Shared transfer progress for IO/preview/edit workers.
     pub transfer_progress: Arc<crate::core::TransferProgress>,
-    pub dir_size_tx: mpsc::Sender<path::PathBuf>,
-    pub dir_size_rx: mpsc::Receiver<(path::PathBuf, u64)>,
+    pub dir_size_tx: mpsc::Sender<(u64, Vec<path::PathBuf>)>,
+    pub dir_size_rx: mpsc::Receiver<(u64, Vec<crate::workers::DirSizeNote>)>,
+    /// Completed folder totals. A scan still in progress is not stored here,
+    /// so a reload cannot present a short count as the whole folder.
     pub dir_sizes: HashMap<path::PathBuf, u64>,
     pub dir_size_pending: HashSet<path::PathBuf>,
-    pub remote_dir_size_tx: mpsc::Sender<(String, String)>,
+    /// Folders whose on-screen size is a lower bound and should render with `+`.
+    pub dir_size_partial: HashSet<path::PathBuf>,
+    /// Bumped when the active view changes so queued folder walks are skipped.
+    pub dir_size_gen: Arc<AtomicU64>,
+    pub remote_dir_size_tx: mpsc::Sender<(u64, String, String)>,
     pub remote_dir_size_rx: mpsc::Receiver<(String, String, u64)>,
     pub remote_dir_sizes: HashMap<(String, String), u64>,
     pub remote_dir_size_pending: HashSet<(String, String)>,
+    pub remote_dir_size_gen: Arc<AtomicU64>,
+    /// Active panel and `dir_token` whose folders were already queued.
+    pub auto_size_queued: Option<(ActivePanel, u64)>,
     pub fs_last_selected_name: HashMap<path::PathBuf, String>,
     pub container_last_selected_name: HashMap<(path::PathBuf, String, ContainerKind), String>,
     pub container_dir_cache: HashMap<(path::PathBuf, String, ContainerKind), ContainerDirCache>,

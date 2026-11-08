@@ -350,9 +350,15 @@ fn init_headless_app(root: Option<PathBuf>) -> anyhow::Result<app_state::AppStat
         sftp_sessions_shared.clone(),
         transfer_progress.clone(),
     );
-    let (dir_size_tx, dir_size_rx) = workers::start_dir_size_worker(None);
-    let (remote_dir_size_tx, remote_dir_size_rx) =
-        workers::start_remote_dir_size_worker(sftp_sessions_shared.clone(), None);
+    let dir_size_gen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let remote_dir_size_gen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1));
+    let (dir_size_tx, dir_size_rx) =
+        workers::start_dir_size_worker(None, std::sync::Arc::clone(&dir_size_gen));
+    let (remote_dir_size_tx, remote_dir_size_rx) = workers::start_remote_dir_size_worker(
+        sftp_sessions_shared.clone(),
+        None,
+        std::sync::Arc::clone(&remote_dir_size_gen),
+    );
     let (search_tx, search_rx) = workers::start_search_worker(None, sftp_sessions_shared.clone());
     let (edit_tx, edit_rx) = mpsc::channel::<core::EditLoadRequest>();
     let (edit_res_tx, edit_res_rx) = mpsc::channel::<core::EditLoadResult>();
@@ -458,10 +464,14 @@ fn init_headless_app(root: Option<PathBuf>) -> anyhow::Result<app_state::AppStat
         dir_size_rx,
         dir_sizes: Default::default(),
         dir_size_pending: Default::default(),
+        dir_size_partial: Default::default(),
+        dir_size_gen,
         remote_dir_size_tx,
         remote_dir_size_rx,
         remote_dir_sizes: Default::default(),
         remote_dir_size_pending: Default::default(),
+        remote_dir_size_gen,
+        auto_size_queued: None,
         fs_last_selected_name: Default::default(),
         container_last_selected_name: Default::default(),
         container_dir_cache: Default::default(),

@@ -66,8 +66,9 @@ pub(crate) fn render_snapshot(
     let (io_tx, _io_rx_unused) = mpsc::channel::<core::IOTask>();
     let (_io_res_tx, io_rx) = mpsc::channel::<core::IOResult>();
     let (io_cancel_tx, _io_cancel_rx) = mpsc::channel::<()>();
-    let (dir_size_tx, _dir_size_req_rx) = mpsc::channel::<PathBuf>();
-    let (_dir_size_res_tx, dir_size_rx) = mpsc::channel::<(PathBuf, u64)>();
+    let (dir_size_tx, _dir_size_req_rx) = mpsc::channel::<(u64, Vec<PathBuf>)>();
+    let (_dir_size_res_tx, dir_size_rx) =
+        mpsc::channel::<(u64, Vec<fileman::workers::DirSizeNote>)>();
     let (edit_tx, _edit_req_rx) = mpsc::channel::<core::EditLoadRequest>();
     let (_edit_res_tx, edit_res_rx) = mpsc::channel::<core::EditLoadResult>();
     let (search_tx, _search_req_rx) = mpsc::channel::<core::SearchRequest>();

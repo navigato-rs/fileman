@@ -30,6 +30,14 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub auto_refresh: bool,
 
+    /// List names that start with a dot. `..` stays either way.
+    #[serde(default = "default_true")]
+    pub show_hidden: bool,
+
+    /// Fill in every folder size on the active panel.
+    #[serde(default)]
+    pub auto_sizes: bool,
+
     /// Saved SFTP host bookmarks. Surfaced in the quick-jump dropdown so a
     /// labeled bookmark expands to (host, initial_path).
     #[serde(default)]
@@ -62,6 +70,8 @@ impl Default for Settings {
             show_glyphs: true,
             row_striping: true,
             auto_refresh: true,
+            show_hidden: true,
+            auto_sizes: false,
             bookmarks: Vec::new(),
         }
     }

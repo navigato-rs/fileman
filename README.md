@@ -73,6 +73,7 @@ xattr -dr com.apple.quarantine /Applications/FileMan.app
 | F10 | Theme picker |
 | Insert / Ctrl+I | Mark / unmark |
 | Space | Compute folder size |
+| View button | Show hidden files, or fill in folder sizes. A local total keeps a + until the scan finishes |
 | Alt+Enter | Properties |
 | Ctrl+G | Quick jump to a folder or file |
 | Ctrl+Shift+C | Copy path to clipboard |

@@ -3,17 +3,18 @@ use std::os::unix::ffi::OsStrExt as _;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt as _;
 use std::{
+    collections::VecDeque,
     fs::File,
     io::Read,
     path::{Path, PathBuf},
     sync::mpsc,
     thread,
-    time::UNIX_EPOCH,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::core::{
     EntryLocation, IOResult, IOTask, PreviewContent, PreviewRequest, SearchCase, SearchEvent,
@@ -24,8 +25,59 @@ use crate::core::{
 use crate::sftp::SftpSession;
 
 type SftpSessions = Arc<Mutex<std::collections::HashMap<String, Arc<Mutex<SftpSession>>>>>;
+/// A size request that still runs after the active view changes.
+pub const MANUAL_DIR_SIZE: u64 = u64::MAX;
+
+/// A folder size from the local walk. [`DirSizeKind::Partial`] is a lower bound.
+#[derive(Debug)]
+pub struct DirSizeNote {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub kind: DirSizeKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirSizeKind {
+    Partial,
+    Done,
+}
+
+type DirSizeChannels = (
+    mpsc::Sender<(u64, Vec<PathBuf>)>,
+    mpsc::Receiver<(u64, Vec<DirSizeNote>)>,
+);
+
+/// How often a walk publishes totals that are still growing.
+const DIR_SIZE_TICK: Duration = Duration::from_millis(80);
+
+struct SizeJob {
+    root: usize,
+    path: PathBuf,
+}
+
+struct SizeQueue {
+    jobs: VecDeque<SizeJob>,
+    busy: usize,
+}
+
+struct SizeRoot {
+    path: PathBuf,
+    bytes: AtomicU64,
+    /// Directories still open. Starts at 1 for the root. Children are added
+    /// before the current directory is subtracted, so the worker that reaches
+    /// zero has seen every byte.
+    remaining: AtomicU64,
+    finished: AtomicBool,
+}
+
+struct WalkState {
+    queue: Mutex<SizeQueue>,
+    cv: Condvar,
+    roots: Vec<SizeRoot>,
+    stop: AtomicBool,
+}
 type RemoteDirSizeChannels = (
-    mpsc::Sender<(String, String)>,
+    mpsc::Sender<(u64, String, String)>,
     mpsc::Receiver<(String, String, u64)>,
 );
 
@@ -1150,34 +1202,264 @@ fn preview_request_id(request: &PreviewRequest) -> u64 {
     }
 }
 
+fn walker_threads() -> usize {
+    thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(4)
+        .clamp(2, 16)
+}
+
+fn generation_matches(epoch: u64, generation: &AtomicU64) -> bool {
+    epoch == MANUAL_DIR_SIZE || epoch == generation.load(Ordering::Relaxed)
+}
+
+/// One shared walk for every folder in the batch. Breadth-first, so each
+/// visible folder receives its direct files before any single tree is exhausted.
+/// Running totals are published about every [`DIR_SIZE_TICK`]; a finished
+/// folder is published as soon as its last directory returns.
 pub fn start_dir_size_worker(
     wake: Option<Arc<dyn Fn() + Send + Sync>>,
-) -> (mpsc::Sender<PathBuf>, mpsc::Receiver<(PathBuf, u64)>) {
-    let (tx, rx) = mpsc::channel::<PathBuf>();
-    let (result_tx, result_rx) = mpsc::channel::<(PathBuf, u64)>();
-    let max_concurrent = 4usize;
+    generation: Arc<AtomicU64>,
+) -> DirSizeChannels {
+    let (tx, rx) = mpsc::channel::<(u64, Vec<PathBuf>)>();
+    let (result_tx, result_rx) = mpsc::channel::<(u64, Vec<DirSizeNote>)>();
     thread::spawn(move || {
-        let mut active: Vec<thread::JoinHandle<()>> = Vec::new();
-        while let Ok(path) = rx.recv() {
-            active.retain(|h| !h.is_finished());
-            if active.len() >= max_concurrent {
-                let _ = active.remove(0).join();
+        while let Ok((epoch, paths)) = rx.recv() {
+            if paths.is_empty() || !generation_matches(epoch, &generation) {
+                continue;
             }
-            let result_tx = result_tx.clone();
-            let wake = wake.clone();
-            active.push(thread::spawn(move || {
-                let size = compute_dir_size(&path);
-                let _ = result_tx.send((path, size));
-                if let Some(ref w) = wake {
-                    w();
-                }
-            }));
-        }
-        for handle in active {
-            let _ = handle.join();
+            walk_dirs(epoch, paths, &generation, &result_tx, &wake);
         }
     });
     (tx, result_rx)
+}
+
+fn walk_dirs(
+    epoch: u64,
+    paths: Vec<PathBuf>,
+    generation: &AtomicU64,
+    result_tx: &mpsc::Sender<(u64, Vec<DirSizeNote>)>,
+    wake: &Option<Arc<dyn Fn() + Send + Sync>>,
+) {
+    let state = WalkState {
+        queue: Mutex::new(SizeQueue {
+            jobs: VecDeque::new(),
+            busy: 0,
+        }),
+        cv: Condvar::new(),
+        roots: paths
+            .into_iter()
+            .map(|path| SizeRoot {
+                path,
+                bytes: AtomicU64::new(0),
+                remaining: AtomicU64::new(1),
+                finished: AtomicBool::new(false),
+            })
+            .collect(),
+        stop: AtomicBool::new(false),
+    };
+    {
+        let mut queue = lock_or_recover(&state.queue);
+        for (root, size_root) in state.roots.iter().enumerate() {
+            queue.jobs.push_back(SizeJob {
+                root,
+                path: size_root.path.clone(),
+            });
+        }
+    }
+    let mut sent_partial = vec![0u64; state.roots.len()];
+    let mut sent_done = vec![false; state.roots.len()];
+    let mut last_partial = Instant::now();
+    thread::scope(|scope| {
+        for _ in 0..walker_threads() {
+            scope.spawn(|| walk_worker(&state));
+        }
+        loop {
+            if !generation_matches(epoch, generation) {
+                state.stop.store(true, Ordering::Relaxed);
+                {
+                    let mut queue = lock_or_recover(&state.queue);
+                    queue.jobs.clear();
+                }
+                state.cv.notify_all();
+                break;
+            }
+            let idle = wait_for_dirs(&state);
+            let partials = last_partial.elapsed() >= DIR_SIZE_TICK;
+            if partials {
+                last_partial = Instant::now();
+            }
+            publish_dir_sizes(
+                &state,
+                epoch,
+                result_tx,
+                wake,
+                &mut sent_partial,
+                &mut sent_done,
+                partials || idle,
+            );
+            if idle {
+                break;
+            }
+        }
+    });
+    publish_dir_sizes(
+        &state,
+        epoch,
+        result_tx,
+        wake,
+        &mut sent_partial,
+        &mut sent_done,
+        true,
+    );
+}
+
+fn wait_for_dirs(state: &WalkState) -> bool {
+    let queue = lock_or_recover(&state.queue);
+    if queue.jobs.is_empty() && queue.busy == 0 {
+        return true;
+    }
+    let (queue, _) = match state.cv.wait_timeout(queue, DIR_SIZE_TICK) {
+        Ok(waited) => waited,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    queue.jobs.is_empty() && queue.busy == 0
+}
+
+fn publish_dir_sizes(
+    state: &WalkState,
+    epoch: u64,
+    result_tx: &mpsc::Sender<(u64, Vec<DirSizeNote>)>,
+    wake: &Option<Arc<dyn Fn() + Send + Sync>>,
+    sent_partial: &mut [u64],
+    sent_done: &mut [bool],
+    partials: bool,
+) {
+    let stopped = state.stop.load(Ordering::Relaxed);
+    let mut notes = Vec::new();
+    for (index, root) in state.roots.iter().enumerate() {
+        if sent_done[index] {
+            continue;
+        }
+        if root.finished.load(Ordering::Acquire) && !stopped {
+            notes.push(DirSizeNote {
+                path: root.path.clone(),
+                bytes: root.bytes.load(Ordering::Acquire),
+                kind: DirSizeKind::Done,
+            });
+            sent_done[index] = true;
+            continue;
+        }
+        if !partials {
+            continue;
+        }
+        let bytes = root.bytes.load(Ordering::Acquire);
+        if bytes > 0 && bytes != sent_partial[index] {
+            notes.push(DirSizeNote {
+                path: root.path.clone(),
+                bytes,
+                kind: DirSizeKind::Partial,
+            });
+            sent_partial[index] = bytes;
+        }
+    }
+    if notes.is_empty() {
+        return;
+    }
+    if result_tx.send((epoch, notes)).is_ok()
+        && let Some(ref wake) = *wake
+    {
+        wake();
+    }
+}
+
+fn walk_worker(state: &WalkState) {
+    loop {
+        let job = {
+            let mut queue = lock_or_recover(&state.queue);
+            loop {
+                if let Some(job) = queue.jobs.pop_front() {
+                    queue.busy += 1;
+                    break job;
+                }
+                if queue.busy == 0 {
+                    state.cv.notify_all();
+                    return;
+                }
+                queue = match state.cv.wait(queue) {
+                    Ok(queue) => queue,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+            }
+        };
+        // A cancelled job was already taken off the queue. Skipping it keeps a
+        // short count from being reported as the finished total.
+        if !state.stop.load(Ordering::Relaxed) {
+            let root = &state.roots[job.root];
+            let subdirs = scan_dir(&job.path, &root.bytes, &state.stop);
+            {
+                let mut queue = lock_or_recover(&state.queue);
+                if !state.stop.load(Ordering::Relaxed) && !subdirs.is_empty() {
+                    let sleeping = queue.jobs.is_empty();
+                    root.remaining
+                        .fetch_add(subdirs.len() as u64, Ordering::Relaxed);
+                    for path in subdirs {
+                        queue.jobs.push_back(SizeJob {
+                            root: job.root,
+                            path,
+                        });
+                    }
+                    if sleeping {
+                        state.cv.notify_all();
+                    }
+                }
+            }
+            finish_dir(state, job.root);
+        }
+        let mut queue = lock_or_recover(&state.queue);
+        queue.busy -= 1;
+        if queue.jobs.is_empty() && queue.busy == 0 {
+            state.cv.notify_all();
+        }
+    }
+}
+
+fn finish_dir(state: &WalkState, index: usize) {
+    let root = &state.roots[index];
+    if root.remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+        root.finished.store(true, Ordering::Release);
+        state.cv.notify_all();
+    }
+}
+
+/// Apparent size of one directory, added as files are seen. Symlinks are not
+/// followed and not counted.
+fn scan_dir(path: &Path, bytes: &AtomicU64, stop: &AtomicBool) -> Vec<PathBuf> {
+    let mut subdirs = Vec::new();
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return subdirs;
+    };
+    for entry in entries {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        let file_type = meta.file_type();
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
+            subdirs.push(entry.path());
+        } else if file_type.is_file() {
+            bytes.fetch_add(meta.len(), Ordering::Release);
+        }
+    }
+    subdirs
 }
 
 fn is_preview_current(current_id: &std::sync::atomic::AtomicU64, id: u64) -> bool {
@@ -1858,17 +2140,22 @@ fn run_remote_search(
 }
 
 /// Worker that computes remote directory sizes via `du` over SSH exec.
-/// Receives `(host, remote_path)` pairs, sends `(host, remote_path, byte_count)` back.
+/// Receives `(generation, host, remote_path)` and sends `(host, remote_path, byte_count)` back.
+/// A generation other than [`MANUAL_DIR_SIZE`] is skipped once the caller bumps `generation`.
 pub fn start_remote_dir_size_worker(
     sftp_sessions: SftpSessions,
     wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    generation: Arc<AtomicU64>,
 ) -> RemoteDirSizeChannels {
-    let (tx, rx) = mpsc::channel::<(String, String)>();
+    let (tx, rx) = mpsc::channel::<(u64, String, String)>();
     let (result_tx, result_rx) = mpsc::channel::<(String, String, u64)>();
     let max_concurrent = 4usize;
     thread::spawn(move || {
         let mut active: Vec<thread::JoinHandle<()>> = Vec::new();
-        while let Ok((host, path)) = rx.recv() {
+        while let Ok((epoch, host, path)) = rx.recv() {
+            if epoch != MANUAL_DIR_SIZE && epoch != generation.load(Ordering::Relaxed) {
+                continue;
+            }
             active.retain(|h| !h.is_finished());
             if active.len() >= max_concurrent {
                 let _ = active.remove(0).join();
@@ -1897,35 +2184,6 @@ pub fn start_remote_dir_size_worker(
         }
     });
     (tx, result_rx)
-}
-
-fn compute_dir_size(root: &Path) -> u64 {
-    let mut total = 0u64;
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let read_dir = match std::fs::read_dir(&dir) {
-            Ok(rd) => rd,
-            Err(_) => continue,
-        };
-        for entry in read_dir.flatten() {
-            let path = entry.path();
-            let file_type = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
-            if file_type.is_symlink() {
-                continue;
-            }
-            if file_type.is_dir() {
-                stack.push(path);
-            } else if file_type.is_file()
-                && let Ok(meta) = entry.metadata()
-            {
-                total = total.saturating_add(meta.len());
-            }
-        }
-    }
-    total
 }
 
 #[cfg(test)]
@@ -1987,5 +2245,114 @@ mod preview_stream {
             .find("[Preview truncated at")
             .expect("truncation notice");
         assert!(at >= 50);
+    }
+}
+
+#[cfg(test)]
+mod dir_size_walk {
+    use std::{
+        collections::HashMap,
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+            mpsc,
+        },
+        time::{Duration, Instant, UNIX_EPOCH},
+    };
+
+    use super::{DirSizeKind, MANUAL_DIR_SIZE, start_dir_size_worker};
+
+    struct RemoveOnDrop(PathBuf);
+
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn shared_walk_sums_each_folder_and_skips_symlinks() {
+        let root = std::env::temp_dir().join(format!(
+            "fileman-size-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _cleanup = RemoveOnDrop(root.clone());
+        std::fs::create_dir_all(root.join("a/nested/deep")).unwrap();
+        std::fs::create_dir(root.join("a/empty")).unwrap();
+        std::fs::create_dir(root.join("b")).unwrap();
+        std::fs::create_dir(root.join("c")).unwrap();
+        std::fs::write(root.join("a/one.txt"), vec![1u8; 10]).unwrap();
+        std::fs::write(root.join("a/nested/two.txt"), vec![2u8; 25]).unwrap();
+        std::fs::write(root.join("a/nested/deep/four.txt"), vec![4u8; 4]).unwrap();
+        std::fs::write(root.join("b/three.txt"), vec![3u8; 7]).unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(root.join("b"), root.join("a/to-b")).unwrap();
+            std::os::unix::fs::symlink(root.join("a/one.txt"), root.join("a/one-link")).unwrap();
+        }
+
+        let generation = Arc::new(AtomicU64::new(7));
+        let (tx, rx) = start_dir_size_worker(None, Arc::clone(&generation));
+        let folders = [root.join("a"), root.join("b"), root.join("c")];
+        tx.send((7, folders.to_vec())).unwrap();
+
+        let mut partial: HashMap<PathBuf, u64> = HashMap::new();
+        let mut done: HashMap<PathBuf, u64> = HashMap::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while done.len() < folders.len() && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok((epoch, notes)) => {
+                    assert_eq!(epoch, 7);
+                    for note in notes {
+                        match note.kind {
+                            DirSizeKind::Partial => {
+                                let previous = partial.get(&note.path).copied().unwrap_or(0);
+                                assert!(note.bytes >= previous);
+                                partial.insert(note.path, note.bytes);
+                            }
+                            DirSizeKind::Done => {
+                                if let Some(lower) = partial.get(&note.path) {
+                                    assert!(note.bytes >= *lower);
+                                }
+                                done.insert(note.path, note.bytes);
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert_eq!(done.get(&folders[0]).copied(), Some(39));
+        assert_eq!(done.get(&folders[1]).copied(), Some(7));
+        assert_eq!(done.get(&folders[2]).copied(), Some(0));
+
+        let _ = rx.recv_timeout(Duration::from_millis(150));
+        generation.store(8, Ordering::Relaxed);
+        tx.send((3, vec![folders[1].clone()])).unwrap();
+        tx.send((MANUAL_DIR_SIZE, vec![folders[1].clone()]))
+            .unwrap();
+        let mut manual = None;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while manual.is_none() && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok((epoch, notes)) => {
+                    assert_ne!(epoch, 3);
+                    if epoch == MANUAL_DIR_SIZE {
+                        manual = notes.into_iter().find_map(|note| {
+                            (note.kind == DirSizeKind::Done).then_some(note.bytes)
+                        });
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert_eq!(manual, Some(7));
     }
 }

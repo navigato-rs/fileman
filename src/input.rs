@@ -688,21 +688,8 @@ fn open_selected_from_to(
         }
     }
 
-    while let Ok((path, size)) = app.dir_size_rx.try_recv() {
-        app.dir_size_pending.remove(&path);
-        app.dir_sizes.insert(path.clone(), size);
-        for side in [core::ActivePanel::Left, core::ActivePanel::Right] {
-            let panel = app.panel_mut(side);
-            let browser = panel.browser_mut();
-            for entry in &mut browser.entries {
-                if entry.is_dir
-                    && let core::EntryLocation::Fs(p) = &entry.location
-                    && *p == path
-                {
-                    entry.size = Some(size);
-                }
-            }
-        }
+    while let Ok((epoch, notes)) = app.dir_size_rx.try_recv() {
+        crate::apply_dir_size_notes(app, epoch, notes);
     }
 }
 
@@ -1159,14 +1146,20 @@ pub(crate) fn handle_keyboard(
                 core::EntryLocation::Fs(path) => {
                     if !app.dir_size_pending.contains(&path) {
                         app.dir_size_pending.insert(path.clone());
-                        let _ = app.dir_size_tx.send(path);
+                        let _ = app
+                            .dir_size_tx
+                            .send((fileman::workers::MANUAL_DIR_SIZE, vec![path]));
                     }
                 }
                 core::EntryLocation::Remote { host, path } => {
                     let key = (host.clone(), path.clone());
                     if !app.remote_dir_size_pending.contains(&key) {
                         app.remote_dir_size_pending.insert(key);
-                        let _ = app.remote_dir_size_tx.send((host, path));
+                        let _ = app.remote_dir_size_tx.send((
+                            fileman::workers::MANUAL_DIR_SIZE,
+                            host,
+                            path,
+                        ));
                     }
                 }
                 core::EntryLocation::Container { .. } => {}

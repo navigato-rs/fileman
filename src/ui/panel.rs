@@ -473,6 +473,81 @@ fn draw_tab_bar(
 /// Sort controls sit on `header_bg`. A system-themed button can be the same
 /// color as the label (light-on-light when macOS is in light mode), so the
 /// chip is shifted away from the label color.
+fn paint_view_icon(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
+    let mid = rect.center().y;
+    let left = rect.left() + 6.0;
+    let right = rect.right() - 6.0;
+    for dy in [-4.0_f32, 0.0, 4.0] {
+        ui.painter().line_segment(
+            [egui::pos2(left, mid + dy), egui::pos2(right, mid + dy)],
+            egui::Stroke::new(1.5_f32, color),
+        );
+    }
+}
+
+/// Hover menu for the panel. Returns the new option values when one changes.
+fn draw_view_menu(
+    ui: &mut egui::Ui,
+    colors: &theme::ThemeColors,
+    show_hidden: bool,
+    auto_sizes: bool,
+    panel_side: core::ActivePanel,
+) -> Option<(bool, bool)> {
+    let salt = match panel_side {
+        core::ActivePanel::Left => "left_view",
+        core::ActivePanel::Right => "right_view",
+    };
+    let height = ui.spacing().interact_size.y;
+    let response = ui
+        .push_id(salt, |ui| {
+            ui.add_sized(egui::vec2(26.0, height), egui::Button::new("").frame(true))
+        })
+        .inner;
+    paint_view_icon(ui, response.rect, color32(colors.header_fg));
+    let id = response.id.with("open");
+    let mut open = ui
+        .ctx()
+        .data(|data| data.get_temp::<bool>(id).unwrap_or(false));
+    if response.hovered() {
+        open = true;
+    }
+    let mut popup_rect = None;
+    let mut changed = None;
+    if open {
+        let shown = egui::Popup::from_response(&response)
+            .id(id.with("popup"))
+            .open(true)
+            .kind(egui::PopupKind::Menu)
+            .align(egui::RectAlign::BOTTOM_END)
+            .gap(4.0)
+            .close_behavior(egui::PopupCloseBehavior::IgnoreClicks)
+            .layout(egui::Layout::top_down(egui::Align::Min))
+            .show(|ui| {
+                ui.set_min_width(196.0);
+                ui.visuals_mut().override_text_color = None;
+                let mut hidden = show_hidden;
+                let mut sizes = auto_sizes;
+                let hidden_changed = ui.checkbox(&mut hidden, "Show hidden files").changed();
+                let sizes_changed = ui.checkbox(&mut sizes, "Auto-compute sizes").changed();
+                (hidden_changed || sizes_changed).then_some((hidden, sizes))
+            });
+        if let Some(inner) = shown {
+            popup_rect = Some(inner.response.rect);
+            changed = inner.inner;
+        }
+    }
+    let pointer = ui.input(|input| input.pointer.hover_pos());
+    let over = pointer.is_some_and(|pos| {
+        response.rect.contains(pos)
+            || popup_rect.is_some_and(|rect| response.rect.union(rect).contains(pos))
+    });
+    if !over {
+        open = false;
+    }
+    ui.ctx().data_mut(|data| data.insert_temp(id, open));
+    changed
+}
+
 fn header_control_visuals(ui: &mut egui::Ui, colors: &theme::ThemeColors) {
     let fg = color32(colors.header_fg);
     let bg = header_chip(colors, 0.22);
@@ -587,6 +662,9 @@ pub fn draw_panel(
                             );
                         }
 
+                        let show_hidden = app.settings.show_hidden;
+                        let auto_sizes = app.settings.auto_sizes;
+                        let mut view_change = None;
                         ui.allocate_ui_with_layout(
                             egui::Vec2::new(ui.available_width(), header_height),
                             egui::Layout::top_down(egui::Align::LEFT),
@@ -668,6 +746,13 @@ pub fn draw_panel(
                                                     sort_desc = !sort_desc;
                                                     sort_changed = true;
                                                 }
+                                                view_change = draw_view_menu(
+                                                    ui,
+                                                    &colors,
+                                                    show_hidden,
+                                                    auto_sizes,
+                                                    panel_side,
+                                                );
                                                 ui.add_space(8.0);
                                                 let left_rect = ui.available_rect_before_wrap();
                                                 let header_font =
@@ -810,6 +895,20 @@ pub fn draw_panel(
                                     });
                             },
                         );
+
+                        if let Some((hidden, sizes)) = view_change {
+                            crate::apply_view_options(app, hidden, sizes);
+                            let browser = app.panel(panel_side).browser();
+                            entries_len = browser.entries.len();
+                            selected_index =
+                                browser.selected_index.min(entries_len.saturating_sub(1));
+                            selected_label = browser
+                                .entries
+                                .get(selected_index)
+                                .map(|entry| entry.name.clone())
+                                .unwrap_or_else(|| "-".to_string());
+                            loading = browser.load.is_loading();
+                        }
 
                         if request_raw_reload {
                             reload_panel(app, panel_side);
@@ -1025,12 +1124,25 @@ pub fn draw_panel(
 
                                         let mut size_text =
                                             entry.size.map(core::format_size).unwrap_or_default();
-                                        if size_text.is_empty()
-                                            && entry.is_dir
-                                            && let core::EntryLocation::Fs(path) = &entry.location
-                                            && app.dir_size_pending.contains(path)
-                                        {
+                                        let (size_pending, size_partial) = match entry.location {
+                                            core::EntryLocation::Fs(ref path) => (
+                                                app.dir_size_pending.contains(path),
+                                                app.dir_size_partial.contains(path),
+                                            ),
+                                            core::EntryLocation::Remote { ref host, ref path } => (
+                                                app.remote_dir_size_pending.iter().any(
+                                                    |(pending_host, pending_path)| {
+                                                        pending_host == host && pending_path == path
+                                                    },
+                                                ),
+                                                false,
+                                            ),
+                                            core::EntryLocation::Container { .. } => (false, false),
+                                        };
+                                        if size_text.is_empty() && entry.is_dir && size_pending {
                                             size_text = "…".to_string();
+                                        } else if size_partial && !size_text.is_empty() {
+                                            size_text.push('+');
                                         }
                                         if !size_text.is_empty() {
                                             ui.painter().text(

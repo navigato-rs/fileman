@@ -1095,7 +1095,212 @@ fn entries_name_equivalent(a: &[core::DirEntry], b: &[core::DirEntry]) -> bool {
     a_keys == b_keys
 }
 
-fn apply_dir_batch(browser: &mut app_state::BrowserState, batch: core::DirBatch) {
+fn is_hidden_name(name: &str) -> bool {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    base.starts_with('.') && base != ".."
+}
+
+fn hide_dotfiles(entries: &mut Vec<core::DirEntry>) {
+    entries.retain(|entry| !is_hidden_name(&entry.name));
+}
+
+fn clamp_selection(browser: &mut app_state::BrowserState, keep: Option<String>) {
+    if let Some(ref name) = keep
+        && let Some(idx) = browser.entries.iter().position(|entry| entry.name == *name)
+    {
+        browser.selected_index = idx;
+    } else if browser.entries.is_empty() {
+        browser.selected_index = 0;
+    } else if browser.selected_index >= browser.entries.len() {
+        browser.selected_index = browser.entries.len() - 1;
+    }
+    if browser.selected_index < browser.top_index {
+        browser.top_index = browser.selected_index;
+    }
+}
+
+fn conceal_browser(browser: &mut app_state::BrowserState) {
+    let keep = browser
+        .entries
+        .get(browser.selected_index)
+        .map(|entry| entry.name.clone());
+    hide_dotfiles(&mut browser.entries);
+    if let Some(ref mut narrow) = browser.folder_narrow {
+        hide_dotfiles(&mut narrow.entries);
+    }
+    for cached in &mut browser.parent_cache {
+        hide_dotfiles(&mut cached.entries);
+        if cached.selected_index >= cached.entries.len() {
+            cached.selected_index = cached.entries.len().saturating_sub(1);
+        }
+    }
+    clamp_selection(browser, keep);
+}
+
+fn conceal_hidden(app: &mut app_state::AppState) {
+    for side in [core::ActivePanel::Left, core::ActivePanel::Right] {
+        for browser in &mut app.panel_mut(side).tabs {
+            conceal_browser(browser);
+        }
+    }
+    for cache in app.container_dir_cache.values_mut() {
+        hide_dotfiles(&mut cache.entries);
+        if cache.selected_index >= cache.entries.len() {
+            cache.selected_index = cache.entries.len().saturating_sub(1);
+        }
+    }
+}
+
+fn reveal_hidden(app: &mut app_state::AppState) {
+    app.container_dir_cache.clear();
+    for side in [core::ActivePanel::Left, core::ActivePanel::Right] {
+        let active = app.panel(side).active_tab;
+        let count = app.panel(side).tabs.len();
+        for index in 0..count {
+            app.panel_mut(side).active_tab = index;
+            app.panel_mut(side).browser_mut().parent_cache.clear();
+            let search = matches!(
+                app.panel(side).browser().browser_mode,
+                core::BrowserMode::Search { .. }
+            );
+            if !search {
+                reload_panel(app, side);
+            }
+        }
+        app.panel_mut(side).active_tab = active;
+    }
+}
+
+pub(crate) fn apply_view_options(
+    app: &mut app_state::AppState,
+    show_hidden: bool,
+    auto_sizes: bool,
+) {
+    let hidden_changed = app.settings.show_hidden != show_hidden;
+    let sizes_changed = app.settings.auto_sizes != auto_sizes;
+    if !hidden_changed && !sizes_changed {
+        return;
+    }
+    app.settings.show_hidden = show_hidden;
+    app.settings.auto_sizes = auto_sizes;
+    if hidden_changed {
+        if show_hidden {
+            reveal_hidden(app);
+        } else {
+            conceal_hidden(app);
+        }
+    }
+    if sizes_changed && auto_sizes {
+        app.auto_size_queued = None;
+    }
+    if let Err(err) = fileman::settings::save(&app.settings) {
+        app.record_error("settings", format!("save failed: {err}"));
+    }
+}
+
+fn cancel_auto_sizes(app: &mut app_state::AppState) {
+    app.dir_size_gen
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    app.remote_dir_size_gen
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    app.dir_size_pending.clear();
+    app.remote_dir_size_pending.clear();
+    app.auto_size_queued = None;
+}
+
+enum FolderSizes {
+    /// Every folder, including ones that already show a total.
+    Refresh,
+    /// Folders that still have no size.
+    Missing,
+}
+
+fn queue_folder_sizes(app: &mut app_state::AppState, which: FolderSizes) -> bool {
+    let side = app.active_panel;
+    let local_gen = app.dir_size_gen.load(std::sync::atomic::Ordering::Relaxed);
+    let remote_gen = app
+        .remote_dir_size_gen
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let jobs: Vec<core::EntryLocation> = {
+        let browser = app.panel(side).browser();
+        browser
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.is_dir
+                    && entry.name != ".."
+                    && match which {
+                        FolderSizes::Refresh => true,
+                        FolderSizes::Missing => entry.size.is_none(),
+                    }
+            })
+            .map(|entry| entry.location.clone())
+            .collect()
+    };
+    let mut queued = false;
+    let mut local_paths = Vec::new();
+    for location in jobs {
+        match location {
+            core::EntryLocation::Fs(path) => {
+                if app.dir_size_pending.insert(path.clone()) {
+                    local_paths.push(path);
+                    queued = true;
+                }
+            }
+            core::EntryLocation::Remote { host, path } => {
+                if app
+                    .remote_dir_size_pending
+                    .insert((host.clone(), path.clone()))
+                {
+                    let _ = app.remote_dir_size_tx.send((remote_gen, host, path));
+                    queued = true;
+                }
+            }
+            core::EntryLocation::Container { .. } => {}
+        }
+    }
+    if !local_paths.is_empty() {
+        let _ = app.dir_size_tx.send((local_gen, local_paths));
+    }
+    queued
+}
+
+/// Queue a size for every folder on the active panel. Leaving that view
+/// skips walks that have not started.
+fn sync_auto_sizes(app: &mut app_state::AppState) -> bool {
+    if !app.settings.auto_sizes {
+        if app.auto_size_queued.take().is_some() {
+            cancel_auto_sizes(app);
+            return true;
+        }
+        return false;
+    }
+    let side = app.active_panel;
+    let (token, loading) = {
+        let browser = app.panel(side).browser();
+        (browser.dir_token, browser.load.is_loading())
+    };
+    let view = (side, token);
+    if loading {
+        if app.auto_size_queued.is_some() && app.auto_size_queued != Some(view) {
+            cancel_auto_sizes(app);
+            return true;
+        }
+        return false;
+    }
+    if app.auto_size_queued == Some(view) {
+        return queue_folder_sizes(app, FolderSizes::Missing);
+    }
+    cancel_auto_sizes(app);
+    app.auto_size_queued = Some(view);
+    queue_folder_sizes(app, FolderSizes::Refresh)
+}
+
+fn apply_dir_batch(
+    browser: &mut app_state::BrowserState,
+    batch: core::DirBatch,
+    show_hidden: bool,
+) {
     // A name filter is showing a subset. Append and replace have to land on
     // the full listing; the next sync publishes the subset again.
     if matches!(
@@ -1199,10 +1404,16 @@ fn apply_dir_batch(browser: &mut app_state::BrowserState, batch: core::DirBatch)
             return;
         }
         core::DirBatch::Append(mut new_entries) => {
+            if !show_hidden {
+                hide_dotfiles(&mut new_entries);
+            }
             browser.entries.append(&mut new_entries);
             // loading flag stays true — cleared when the channel disconnects
         }
-        core::DirBatch::Replace(new_entries) => {
+        core::DirBatch::Replace(mut new_entries) => {
+            if !show_hidden {
+                hide_dotfiles(&mut new_entries);
+            }
             // Skip the swap if the fresh listing is name-equivalent to what
             // we already show. This eliminates the visible "re-populate"
             // when a cache-refresh confirms the directory hasn't changed —
@@ -1246,8 +1457,68 @@ fn apply_dir_batch(browser: &mut app_state::BrowserState, batch: core::DirBatch)
     }
 }
 
+pub(crate) fn apply_dir_size_notes(
+    app: &mut app_state::AppState,
+    epoch: u64,
+    notes: Vec<workers::DirSizeNote>,
+) -> bool {
+    if epoch != workers::MANUAL_DIR_SIZE
+        && epoch != app.dir_size_gen.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        return false;
+    }
+    let mut changed = false;
+    let mut resort = [false; 2];
+    for note in notes {
+        let done = matches!(note.kind, workers::DirSizeKind::Done);
+        if !done && note.bytes == 0 {
+            continue;
+        }
+        changed = true;
+        if done {
+            app.dir_size_pending.remove(&note.path);
+            app.dir_size_partial.remove(&note.path);
+            app.dir_sizes.insert(note.path.clone(), note.bytes);
+        } else {
+            // Drop a previous final so a reload cannot show it as complete
+            // while this walk is still reporting a lower bound.
+            app.dir_sizes.remove(&note.path);
+            app.dir_size_partial.insert(note.path.clone());
+        }
+        for (index, side) in [core::ActivePanel::Left, core::ActivePanel::Right]
+            .into_iter()
+            .enumerate()
+        {
+            let browser = app.panel_mut(side).browser_mut();
+            let mut updated = false;
+            for entry in &mut browser.entries {
+                if entry.is_dir
+                    && let core::EntryLocation::Fs(ref path) = entry.location
+                    && *path == note.path
+                {
+                    entry.size = Some(note.bytes);
+                    updated = true;
+                }
+            }
+            if updated && browser.sort_mode == core::SortMode::Size {
+                resort[index] = true;
+            }
+        }
+    }
+    for (index, side) in [core::ActivePanel::Left, core::ActivePanel::Right]
+        .into_iter()
+        .enumerate()
+    {
+        if resort[index] {
+            resort_browser_entries(app.panel_mut(side).browser_mut());
+        }
+    }
+    changed
+}
+
 fn pump_async(app: &mut app_state::AppState) -> bool {
     let mut changed = false;
+    let show_hidden = app.settings.show_hidden;
     let mut stale_sessions: Vec<String> = Vec::new();
     let mut reconnect_panels: Vec<(core::ActivePanel, String, String)> = Vec::new();
     for side in [core::ActivePanel::Left, core::ActivePanel::Right] {
@@ -1276,7 +1547,7 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
         if !batches.is_empty() {
             changed = true;
             for batch in batches {
-                apply_dir_batch(browser, batch);
+                apply_dir_batch(browser, batch, show_hidden);
             }
         }
         if terminated {
@@ -1291,9 +1562,15 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
             for batch in batches {
                 match batch {
                     core::DirBatch::Append(mut new) => {
+                        if !show_hidden {
+                            hide_dotfiles(&mut new);
+                        }
                         cached.entries.append(&mut new);
                     }
-                    core::DirBatch::Replace(new) => {
+                    core::DirBatch::Replace(mut new) => {
+                        if !show_hidden {
+                            hide_dotfiles(&mut new);
+                        }
                         cached.entries = new;
                     }
                     core::DirBatch::Loading => {
@@ -1392,6 +1669,9 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
                     let idx = shared.lock().unwrap_or_else(|p| p.into_inner());
                     let mut listing = build_listing_from_index(&idx, &archive_path, kind, &cwd);
                     drop(idx);
+                    if !show_hidden {
+                        hide_dotfiles(&mut listing);
+                    }
                     sort_entries(&mut listing, browser.sort_mode, browser.sort_desc);
                     let _ = lift_folder_narrow(browser);
                     // Only replace entries if the filtered listing actually changed.
@@ -1473,27 +1753,10 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
         changed = true;
     }
 
-    while let Ok((path, size)) = app.dir_size_rx.try_recv() {
-        app.dir_size_pending.remove(&path);
-        app.dir_sizes.insert(path.clone(), size);
-        for side in [core::ActivePanel::Left, core::ActivePanel::Right] {
-            let panel = app.panel_mut(side);
-            let browser = panel.browser_mut();
-            let mut updated = false;
-            for entry in &mut browser.entries {
-                if entry.is_dir
-                    && let core::EntryLocation::Fs(p) = &entry.location
-                    && *p == path
-                {
-                    entry.size = Some(size);
-                    updated = true;
-                }
-            }
-            if updated && browser.sort_mode == core::SortMode::Size {
-                resort_browser_entries(browser);
-            }
+    while let Ok((epoch, notes)) = app.dir_size_rx.try_recv() {
+        if apply_dir_size_notes(app, epoch, notes) {
+            changed = true;
         }
-        changed = true;
     }
     while let Ok((host, path, size)) = app.remote_dir_size_rx.try_recv() {
         let key = (host.clone(), path.clone());
@@ -1573,7 +1836,7 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
                         &browser.browser_mode,
                         core::BrowserMode::Remote { host, .. } if *host == nav.host
                     ) {
-                        apply_dir_batch(browser, core::DirBatch::Error(msg));
+                        apply_dir_batch(browser, core::DirBatch::Error(msg), show_hidden);
                     }
                 }
                 // Continue with next queued navigation despite error
@@ -1681,16 +1944,18 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
                         },
                         None => core::EntryLocation::Fs(result.path.clone()),
                     };
-                    browser.entries.push(core::DirEntry {
-                        name: display_name,
-                        is_dir: result.is_dir,
-                        is_symlink: false,
-                        link_target: None,
-                        location,
-                        size: result.size,
-                        modified: result.modified,
-                    });
-                    resort_browser_entries(browser);
+                    if show_hidden || !is_hidden_name(&display_name) {
+                        browser.entries.push(core::DirEntry {
+                            name: display_name,
+                            is_dir: result.is_dir,
+                            is_symlink: false,
+                            link_target: None,
+                            location,
+                            size: result.size,
+                            modified: result.modified,
+                        });
+                        resort_browser_entries(browser);
+                    }
                     if let Some(progress) = progress_for_panel {
                         browser.progress_override = Some(progress);
                     }
@@ -1730,6 +1995,10 @@ fn pump_async(app: &mut app_state::AppState) -> bool {
                 }
             }
         }
+    }
+
+    if sync_auto_sizes(app) {
+        changed = true;
     }
 
     changed
@@ -4564,10 +4833,14 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
                 let _ = proxy.send_event(UserEvent::Wake);
             }
         });
-        let (dir_size_tx, dir_size_rx) = workers::start_dir_size_worker(Some(worker_wake.clone()));
+        let dir_size_gen = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let remote_dir_size_gen = Arc::new(std::sync::atomic::AtomicU64::new(1));
+        let (dir_size_tx, dir_size_rx) =
+            workers::start_dir_size_worker(Some(worker_wake.clone()), Arc::clone(&dir_size_gen));
         let (remote_dir_size_tx, remote_dir_size_rx) = workers::start_remote_dir_size_worker(
             sftp_sessions_shared.clone(),
             Some(worker_wake.clone()),
+            Arc::clone(&remote_dir_size_gen),
         );
         let (search_tx, search_rx) =
             workers::start_search_worker(Some(worker_wake), sftp_sessions_shared.clone());
@@ -4999,10 +5272,14 @@ impl winit::application::ApplicationHandler<UserEvent> for App {
             dir_size_rx,
             dir_sizes: Default::default(),
             dir_size_pending: Default::default(),
+            dir_size_partial: Default::default(),
+            dir_size_gen,
             remote_dir_size_tx,
             remote_dir_size_rx,
             remote_dir_sizes: Default::default(),
             remote_dir_size_pending: Default::default(),
+            remote_dir_size_gen,
+            auto_size_queued: None,
             fs_last_selected_name: Default::default(),
             container_last_selected_name: Default::default(),
             container_dir_cache: Default::default(),
@@ -6242,6 +6519,19 @@ mod tests {
     }
 
     #[test]
+    fn hiding_dotfiles_keeps_dotdot_and_ordinary_names() {
+        let mut browser = remote_browser(&["..", ".git", "src", ".hidden"]);
+        let entries = browser.entries.clone();
+        apply_dir_batch(&mut browser, core::DirBatch::Replace(entries), false);
+        let names: Vec<&str> = browser
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(names, ["..", "src"]);
+    }
+
+    #[test]
     fn name_search_narrows_the_folder_and_escape_keeps_the_match() {
         let mut browser = remote_browser(&["..", "Documents", "Downloads", "readme"]);
         browser.selected_index = 0;
@@ -6281,6 +6571,7 @@ mod tests {
         apply_dir_batch(
             &mut browser,
             core::DirBatch::ConnectionError("timed out".to_string()),
+            true,
         );
         let names: Vec<&str> = browser.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
@@ -6291,7 +6582,7 @@ mod tests {
     fn directory_modified_stamps_the_listing_without_moving_the_cursor() {
         let mut browser = remote_browser(&["a.txt", "b.txt", "c.txt"]);
         let stamp = unix_secs_to_system_time(1_700_000_000);
-        apply_dir_batch(&mut browser, core::DirBatch::DirectoryModified(stamp));
+        apply_dir_batch(&mut browser, core::DirBatch::DirectoryModified(stamp), true);
         assert_eq!(browser.listing_mtime, Some(stamp));
         assert_eq!(browser.selected_index, 1);
         assert_eq!(browser.entries.len(), 3);
@@ -6367,6 +6658,7 @@ mod tests {
         apply_dir_batch(
             &mut browser,
             core::DirBatch::Error("permission denied".to_string()),
+            true,
         );
         assert!(
             browser

@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Features
+- The app icon uses square corners, top lighting, and a long shadow
 - A view button next to sort lists hidden files and can fill in every folder size on the active panel
 - Local folder sizes share one walk and show the total found so far with a +
 - Alt+F5 on a remote panel packs the selection into an archive on the local panel

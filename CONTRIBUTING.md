@@ -30,6 +30,7 @@ Ensure `cargo fmt` is ran and `cargo clippy` is clean.
 - `etc/` — desktop entry, icon, reference snapshots
 - `tests/cases/` — replay test cases (RON format)
 - `tests/data/` — test fixture data
+- `scripts/generate-icons.py` — app icon SVG, macOS PNG, and Windows ICO
 - `scripts/replay_runner.sh` — runs all replay cases with per-test cleanup
 - `scripts/macos-app.sh` — local `FileMan.app` for `make install` (ad-hoc signed)
 - `scripts/macos_package.sh` — signs, notarizes, and packages the macOS release

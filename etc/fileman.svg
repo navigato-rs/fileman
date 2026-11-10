@@ -1,24 +1,289 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1c2434"/>
-      <stop offset="1" stop-color="#242f44"/>
+      <stop offset="0" stop-color="#3a4c64"/>
+      <stop offset="1" stop-color="#161c2a"/>
     </linearGradient>
-    <linearGradient id="panelL" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2a3c60"/>
-      <stop offset="1" stop-color="#1f2c44"/>
+    <linearGradient id="paneL" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4e688c"/>
+      <stop offset="1" stop-color="#24344e"/>
     </linearGradient>
-    <linearGradient id="panelR" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#24314d"/>
-      <stop offset="1" stop-color="#1c2638"/>
+    <linearGradient id="paneR" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#425878"/>
+      <stop offset="1" stop-color="#1c2a40"/>
     </linearGradient>
+    <linearGradient id="split" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#7a96b8"/>
+      <stop offset="1" stop-color="#3a506c"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#c5e2ff"/>
+      <stop offset="1" stop-color="#2a6ac8"/>
+    </linearGradient>
+    <linearGradient id="row" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a4bcd8"/>
+      <stop offset="1" stop-color="#3a506c"/>
+    </linearGradient>
+    <clipPath id="plate">
+      <rect x="8" y="8" width="240" height="240" rx="0" fill="#fff"/>
+    </clipPath>
+    <clipPath id="panes">
+      <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+      <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+    </clipPath>
+    <mask id="cast1" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(4.25 4.25)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#fff"/>
+      </g>
+      <g>
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="cast2" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(8.5 8.5)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(4.25 4.25)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="cast3" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(12.75 12.75)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(8.5 8.5)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="cast4" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(17 17)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(12.75 12.75)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="cast5" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(21.25 21.25)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(17 17)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="cast6" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(25.5 25.5)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(21.25 21.25)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="cast7" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(29.75 29.75)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(25.5 25.5)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="cast8" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(34 34)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#fff"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(29.75 29.75)">
+        <rect x="28" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="132" y="44" width="96" height="168" rx="0" fill="#000"/>
+        <rect x="124" y="44" width="8" height="168" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="bar1" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(4.25 4.25)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#fff"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#fff"/>
+      </g>
+      <g>
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#000"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="bar2" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(8.5 8.5)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#fff"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(4.25 4.25)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#000"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="bar3" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(12.75 12.75)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#fff"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(8.5 8.5)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#000"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="bar4" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(17 17)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#fff"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(12.75 12.75)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#000"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="bar5" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(21.25 21.25)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#fff"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(17 17)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#000"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="bar6" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(25.5 25.5)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#fff"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(21.25 21.25)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#000"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="bar7" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(29.75 29.75)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#fff"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(25.5 25.5)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#000"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#000"/>
+      </g>
+    </mask>
+    <mask id="bar8" maskContentUnits="userSpaceOnUse">
+      <rect width="256" height="256" fill="#000"/>
+      <g transform="translate(34 34)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#fff"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#fff"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#fff"/>
+      </g>
+      <g transform="translate(29.75 29.75)">
+        <rect x="38" y="64" width="72" height="14" rx="0" fill="#000"/>
+        <rect x="38" y="88" width="52" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="64" width="72" height="10" rx="0" fill="#000"/>
+        <rect x="146" y="82" width="60" height="10" rx="0" fill="#000"/>
+      </g>
+    </mask>
   </defs>
-  <rect x="8" y="8" width="240" height="240" rx="24" fill="url(#bg)" stroke="#0f1624" stroke-width="8"/>
-  <rect x="28" y="44" width="92" height="168" rx="10" fill="url(#panelL)" stroke="#182238" stroke-width="4"/>
-  <rect x="136" y="44" width="92" height="168" rx="10" fill="url(#panelR)" stroke="#182238" stroke-width="4"/>
-  <rect x="124" y="44" width="8" height="168" fill="#2b3a55"/>
-  <rect x="38" y="64" width="72" height="14" rx="6" fill="#5fa2ff"/>
-  <rect x="38" y="88" width="52" height="10" rx="5" fill="#3e547a"/>
-  <rect x="146" y="64" width="72" height="10" rx="5" fill="#3e547a"/>
-  <rect x="146" y="82" width="60" height="10" rx="5" fill="#3e547a"/>
+  <rect x="8" y="8" width="240" height="240" rx="0" fill="url(#bg)"/>
+  <g clip-path="url(#plate)">
+    <rect width="256" height="256" fill="#10141c" opacity="0.515625" mask="url(#cast1)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.446875" mask="url(#cast2)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.378125" mask="url(#cast3)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.309375" mask="url(#cast4)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.240625" mask="url(#cast5)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.171875" mask="url(#cast6)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.103125" mask="url(#cast7)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.034375" mask="url(#cast8)"/>
+    <rect x="8" y="8" width="240" height="2" fill="#fff" opacity="0.32"/>
+    <rect x="8" y="246" width="240" height="2" fill="#000" opacity="0.35"/>
+    <rect x="28" y="44" width="96" height="168" rx="0" fill="url(#paneL)"/>
+    <rect x="132" y="44" width="96" height="168" rx="0" fill="url(#paneR)"/>
+    <rect x="124" y="44" width="8" height="168" rx="0" fill="url(#split)"/>
+    <g clip-path="url(#panes)">
+    <rect width="256" height="256" fill="#10141c" opacity="0.515625" mask="url(#bar1)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.446875" mask="url(#bar2)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.378125" mask="url(#bar3)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.309375" mask="url(#bar4)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.240625" mask="url(#bar5)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.171875" mask="url(#bar6)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.103125" mask="url(#bar7)"/>
+    <rect width="256" height="256" fill="#10141c" opacity="0.034375" mask="url(#bar8)"/>
+    </g>
+    <rect x="38" y="64" width="72" height="14" rx="0" fill="url(#mark)"/>
+    <rect x="38" y="88" width="52" height="10" rx="0" fill="url(#row)"/>
+    <rect x="146" y="64" width="72" height="10" rx="0" fill="url(#row)"/>
+    <rect x="146" y="82" width="60" height="10" rx="0" fill="url(#row)"/>
+  </g>
 </svg>

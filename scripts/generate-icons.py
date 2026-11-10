@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Write the FileMan app icon SVG, PNG, and ICO from one set of geometry.
+"""Write the FileMan app icon SVG, PNG, and ICO.
 
-The mark is the two panes and their rows. Corners are square. Lighting is
-Breeze: lighter at the top, darker at the bottom, with a long shadow at 45°
-toward the bottom-right. macOS art is full-bleed because the system draws
-the squircle; the Linux and Windows art keeps an inset plate.
+The mark is the two panes and their rows. Linux keeps the Breeze tile:
+square corners, lighter at the top, and a long shadow at 45°. Windows is a
+Fluent mica tile with rounded corners and the accent blue. macOS is full-bleed
+Liquid Glass; the system draws the squircle.
 """
 from __future__ import annotations
 
@@ -404,29 +404,322 @@ def check_square(name: str, rgba: bytes, size: int, layout: dict) -> None:
         raise SystemExit(f"{name}: plate is not lighter at the top {top} vs {below}")
 
 
+# Windows 11 Fluent. Rounded mica tile, accent blue, shadow falls straight down.
+WIN_PLATE = (10.0, 8.0, 246.0, 234.0)
+WIN_PLATE_R = 44.0
+WIN_PANE_R = 14.0
+WIN_BG_TOP = (0x3E, 0x44, 0x4C)
+WIN_BG_BOT = (0x1A, 0x1C, 0x20)
+WIN_PANE_COLORS = (
+    ((0x5C, 0x64, 0x70), (0x2E, 0x34, 0x3C)),
+    ((0x4E, 0x56, 0x62), (0x26, 0x2C, 0x34)),
+)
+WIN_SPLIT_TOP = (0x9A, 0xA4, 0xB2)
+WIN_SPLIT_BOT = (0x52, 0x5A, 0x66)
+WIN_MARK_HI = (0xE4, 0xF6, 0xFF)
+WIN_MARK_LO = (0x00, 0x78, 0xD4)
+WIN_ROW_HI = (0xE2, 0xE6, 0xEC)
+WIN_ROW_LO = (0x74, 0x7C, 0x88)
+
+# Liquid Glass. Light comes from above. Panes are translucent with a lens edge.
+GLASS_PANE_R = 28.0
+GLASS_BG_TOP = (0x9E, 0xC4, 0xE6)
+GLASS_BG_BOT = (0x16, 0x28, 0x44)
+GLASS_MARK_HI = (0xB4, 0xE4, 0xFF)
+GLASS_MARK_LO = (0x00, 0x6E, 0xE0)
+GLASS_GLOW = (0x64, 0xC2, 0xFF)
+
+
+def sd_round_box(
+    px: float, py: float, x0: float, y0: float, x1: float, y1: float, radius: float
+) -> float:
+    half_w = (x1 - x0) * 0.5
+    half_h = (y1 - y0) * 0.5
+    radius = min(radius, half_w, half_h)
+    dx = abs(px - (x0 + half_w)) - (half_w - radius)
+    dy = abs(py - (y0 + half_h)) - (half_h - radius)
+    return math.hypot(max(dx, 0.0), max(dy, 0.0)) + min(max(dx, dy), 0.0) - radius
+
+
+def pack_rgba(pixels: list[list[list[float]]]) -> bytes:
+    out = bytearray(len(pixels) * len(pixels[0]) * 4)
+    i = 0
+    for row in pixels:
+        for red, green, blue, alpha in row:
+            out[i] = int(red + 0.5)
+            out[i + 1] = int(green + 0.5)
+            out[i + 2] = int(blue + 0.5)
+            out[i + 3] = int(alpha * 255.0 + 0.5)
+            i += 4
+    return bytes(out)
+
+
+def render_windows(size: int, layout: dict) -> bytes:
+    scale = size / VIEW
+    plate = WIN_PLATE
+    panes = layout["panes"]
+    divider = layout["divider"]
+    bars = layout["bars"]
+    pixels = [[[0.0, 0.0, 0.0, 0.0] for _ in range(size)] for _ in range(size)]
+    px0, py0, px1, py1 = plate
+    for y in range(size):
+        py = (y + 0.5) / scale
+        row = pixels[y]
+        plate_rgb = lerp(WIN_BG_TOP, WIN_BG_BOT, (py - py0) / (py1 - py0))
+        for x in range(size):
+            px = (x + 0.5) / scale
+            pixel = row[x]
+            for dy, alpha in ((4.0, 0.22), (9.0, 0.16), (15.0, 0.10)):
+                shade = coverage(sd_round_box(px, py - dy, *plate, WIN_PLATE_R) * scale)
+                if shade:
+                    over(pixel, 0.0, 0.0, 0.0, shade * alpha)
+            plate_sd = sd_round_box(px, py, *plate, WIN_PLATE_R)
+            plate_alpha = coverage(plate_sd * scale)
+            if plate_alpha:
+                over(pixel, *plate_rgb, plate_alpha)
+                if -1.6 < plate_sd < 0.4:
+                    edge = 1.0 - abs(plate_sd + 0.6) / 1.0
+                    if edge > 0.0:
+                        over(pixel, 255.0, 255.0, 255.0, 0.28 * edge * plate_alpha)
+                sheen_t = (py - py0) / (py1 - py0)
+                if sheen_t < 0.22:
+                    over(pixel, 255.0, 255.0, 255.0, 0.16 * (1.0 - sheen_t / 0.22) * plate_alpha)
+            for box, (top, bot) in zip(panes, WIN_PANE_COLORS, strict=True):
+                alpha = coverage(sd_round_box(px, py, *box, WIN_PANE_R) * scale)
+                if alpha:
+                    red, green, blue = lerp(top, bot, (py - box[1]) / (box[3] - box[1]))
+                    over(pixel, red, green, blue, alpha)
+            split_alpha = coverage(sd_round_box(px, py, *divider, 4.0) * scale)
+            if split_alpha:
+                red, green, blue = lerp(WIN_SPLIT_TOP, WIN_SPLIT_BOT, (py - divider[1]) / (divider[3] - divider[1]))
+                over(pixel, red, green, blue, split_alpha)
+            for box, _pane, kind in bars:
+                radius = (box[3] - box[1]) * 0.5
+                alpha = coverage(sd_round_box(px, py, *box, radius) * scale)
+                if not alpha:
+                    continue
+                top, bot = (WIN_MARK_HI, WIN_MARK_LO) if kind == "mark" else (WIN_ROW_HI, WIN_ROW_LO)
+                red, green, blue = lerp(top, bot, (py - box[1]) / (box[3] - box[1]))
+                over(pixel, red, green, blue, alpha)
+    return pack_rgba(pixels)
+
+
+def glass_background(px: float, py: float) -> tuple[float, float, float]:
+    base = lerp(GLASS_BG_TOP, GLASS_BG_BOT, (py / VIEW) ** 0.9)
+    dx = (px - 128.0) / 108.0
+    dy = (py - 24.0) / 88.0
+    pool = max(0.0, 1.0 - (dx * dx * 0.7 + dy * dy))
+    return (
+        base[0] + (255.0 - base[0]) * pool * 0.62,
+        base[1] + (255.0 - base[1]) * pool * 0.55,
+        base[2] + (255.0 - base[2]) * pool * 0.38,
+    )
+
+
+def render_glass(size: int, layout: dict) -> bytes:
+    scale = size / VIEW
+    panes = layout["panes"]
+    divider = layout["divider"]
+    bars = layout["bars"]
+    pixels = [[[0.0, 0.0, 0.0, 0.0] for _ in range(size)] for _ in range(size)]
+    for y in range(size):
+        py = (y + 0.5) / scale
+        row = pixels[y]
+        for x in range(size):
+            px = (x + 0.5) / scale
+            pixel = row[x]
+            over(pixel, *glass_background(px, py), 1.0)
+            if py < 42.0:
+                over(pixel, 255.0, 255.0, 255.0, 0.48 * (1.0 - py / 42.0) ** 1.35)
+            for box in panes:
+                for dy, alpha in ((20.0, 0.10), (12.0, 0.16), (6.0, 0.18)):
+                    shade = coverage(sd_round_box(px, py - dy, *box, GLASS_PANE_R) * scale * 0.45)
+                    if shade:
+                        over(pixel, 6.0, 16.0, 36.0, shade * alpha)
+            for box in panes:
+                sd = sd_round_box(px, py, *box, GLASS_PANE_R)
+                cov = coverage(sd * scale)
+                if not cov:
+                    continue
+                t = (py - box[1]) / (box[3] - box[1])
+                frost = lerp((236, 246, 255), (120, 156, 190), min(1.0, t * 1.15))
+                over(pixel, frost[0], frost[1], frost[2], (0.30 * (1.0 - t) + 0.10) * cov)
+                if t < 0.09:
+                    spec = (1.0 - t / 0.09) ** 1.2
+                    over(pixel, 255.0, 255.0, 255.0, 0.78 * spec * cov)
+                if -3.0 < sd < 0.8:
+                    closeness = 1.0 - abs(sd + 1.0) / 1.9
+                    if closeness > 0.0:
+                        strength = closeness * (0.30 + 0.70 * max(0.0, 1.0 - t))
+                        over(pixel, 255.0, 255.0, 255.0, 0.90 * strength * cov)
+                        if t > 0.62:
+                            over(pixel, 8.0, 20.0, 42.0, 0.40 * closeness * (t - 0.62) / 0.38 * cov)
+            split = coverage(sd_round_box(px, py, *divider, 4.0) * scale)
+            if split:
+                over(pixel, 255.0, 255.0, 255.0, 0.42 * split)
+            for box, _pane, kind in bars:
+                height = box[3] - box[1]
+                radius = height * 0.5
+                if kind == "mark":
+                    pad = 8.0
+                    glow = coverage(
+                        sd_round_box(px, py, box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad, radius + pad)
+                        * scale
+                        * 0.45
+                    )
+                    if glow:
+                        over(pixel, float(GLASS_GLOW[0]), float(GLASS_GLOW[1]), float(GLASS_GLOW[2]), 0.55 * glow)
+                alpha = coverage(sd_round_box(px, py, *box, radius) * scale)
+                if not alpha:
+                    continue
+                t = (py - box[1]) / height
+                if kind == "mark":
+                    red, green, blue = lerp(GLASS_MARK_HI, GLASS_MARK_LO, t)
+                    over(pixel, red, green, blue, alpha)
+                    if t < 0.30:
+                        over(pixel, 255.0, 255.0, 255.0, 0.72 * (1.0 - t / 0.30) * alpha)
+                else:
+                    over(pixel, 255.0, 255.0, 255.0, (0.16 + 0.28 * max(0.0, 1.0 - t)) * alpha)
+    return pack_rgba(pixels)
+
+
+def glass_svg(layout: dict) -> str:
+    panes = layout["panes"]
+    divider = layout["divider"]
+    bars = layout["bars"]
+
+    def rounded(box: tuple[float, float, float, float], radius: float, fill: str, extra: str = "") -> str:
+        x0, y0, x1, y1 = box
+        return (
+            f'<rect x="{fmt(x0)}" y="{fmt(y0)}" width="{fmt(x1 - x0)}" height="{fmt(y1 - y0)}" '
+            f'rx="{fmt(radius)}" fill="{fill}"{extra}/>'
+        )
+
+    pane_tags = "\n    ".join(rounded(box, GLASS_PANE_R, "url(#frost)", ' stroke="#fff" stroke-opacity="0.8" stroke-width="2"') for box in panes)
+    bar_tags = []
+    glow = ""
+    for box, _pane, kind in bars:
+        radius = (box[3] - box[1]) * 0.5
+        if kind == "mark":
+            pad = 8.0
+            glow = rounded(
+                (box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad),
+                radius + pad,
+                "#64c2ff",
+                ' opacity="0.7" filter="url(#glow)"',
+            )
+            bar_tags.append(rounded(box, radius, "url(#mark)"))
+        else:
+            bar_tags.append(rounded(box, radius, "url(#row)"))
+    x0, y0, x1, y1 = divider
+    seam = (
+        f'<rect x="{fmt(x0)}" y="{fmt(y0)}" width="{fmt(x1 - x0)}" height="{fmt(y1 - y0)}" '
+        f'rx="4" fill="#fff" opacity="0.42"/>'
+    )
+    return f"""\
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Full-bleed Liquid Glass. macOS applies the squircle. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="{hex_rgb(GLASS_BG_TOP)}"/>
+      <stop offset="1" stop-color="{hex_rgb(GLASS_BG_BOT)}"/>
+    </linearGradient>
+    <radialGradient id="pool" cx="50%" cy="8%" r="58%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="lip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="frost" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="0.1" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#78a0be" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="{hex_rgb(GLASS_MARK_HI)}"/>
+      <stop offset="1" stop-color="{hex_rgb(GLASS_MARK_LO)}"/>
+    </linearGradient>
+    <linearGradient id="row" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.62"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.16"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="5"/>
+    </filter>
+  </defs>
+  <rect width="256" height="256" fill="url(#bg)"/>
+  <rect width="256" height="256" fill="url(#pool)"/>
+  <rect width="256" height="46" fill="url(#lip)"/>
+  {pane_tags}
+  {seam}
+  {glow}
+  {"    " + chr(10) + "    ".join(bar_tags)}
+</svg>
+"""
+
+
+def check_windows(rgba: bytes, size: int) -> None:
+    scale = size / VIEW
+
+    def at(vx: float, vy: float) -> tuple[int, int, int, int]:
+        return pixel(rgba, size, min(size - 1, int(vx * scale)), min(size - 1, int(vy * scale)))
+
+    # The plate's square corner is outside the rounded Fluent tile.
+    if at(WIN_PLATE[0], WIN_PLATE[1])[3] != 0:
+        raise SystemExit(f"windows: plate corner is not rounded {at(WIN_PLATE[0], WIN_PLATE[1])}")
+    center_top = at((WIN_PLATE[0] + WIN_PLATE[2]) * 0.5, WIN_PLATE[1] + 6.0)
+    if center_top[3] != 255:
+        raise SystemExit(f"windows: tile face is not opaque {center_top}")
+    mark = FRAMED["bars"][0][0]
+    accent = at((mark[0] + mark[2]) * 0.5, (mark[1] + mark[3]) * 0.5)
+    if accent[2] < accent[0] + 30 or accent[2] < 160:
+        raise SystemExit(f"windows: selection is not the accent blue {accent}")
+
+
+def check_glass(name: str, rgba: bytes, size: int) -> None:
+    scale = size / VIEW
+
+    def at(vx: float, vy: float) -> tuple[int, int, int, int]:
+        return pixel(rgba, size, min(size - 1, int(vx * scale)), min(size - 1, int(vy * scale)))
+
+    if at(1.0, 1.0)[3] != 255:
+        raise SystemExit(f"{name}: macOS icon is not full-bleed")
+    pane = FULL["panes"][0]
+    top = at((pane[0] + pane[2]) * 0.5, pane[1] + 6.0)
+    bot = at((pane[0] + pane[2]) * 0.5, pane[3] - 10.0)
+    if sum(top[:3]) < sum(bot[:3]) + 25:
+        raise SystemExit(f"{name}: glass pane is not brighter at the top {top} vs {bot}")
+    mark = FULL["bars"][0][0]
+    accent = at((mark[0] + mark[2]) * 0.5, (mark[1] + mark[3]) * 0.5)
+    beside = at(mark[2] + 10.0, (mark[1] + mark[3]) * 0.5)
+    if accent[2] < accent[0] + 50 or accent[2] < beside[2] + 20:
+        raise SystemExit(f"{name}: selection does not glow {accent} vs {beside}")
+
+
 def main() -> None:
     macos = ROOT / "etc" / "macos"
     windows = ROOT / "etc" / "windows"
     macos.mkdir(parents=True, exist_ok=True)
     windows.mkdir(parents=True, exist_ok=True)
     framed_256 = render(256, FRAMED)
-    full_256 = render(256, FULL)
-    check_square("framed", framed_256, 256, FRAMED)
-    check_square("full", full_256, 256, FULL)
-    full_1024 = render(1024, FULL)
-    check_square("full-1024", full_1024, 1024, FULL)
-    if any(full_1024[i] != 255 for i in range(3, len(full_1024), 4)):
+    check_square("linux", framed_256, 256, FRAMED)
+    windows_256 = render_windows(256, FRAMED)
+    check_windows(windows_256, 256)
+    glass_256 = render_glass(256, FULL)
+    check_glass("glass", glass_256, 256)
+    glass_1024 = render_glass(1024, FULL)
+    check_glass("glass-1024", glass_1024, 1024)
+    if any(glass_1024[i] != 255 for i in range(3, len(glass_1024), 4)):
         raise SystemExit("macOS icon is not full-bleed opaque")
     (ROOT / "etc" / "fileman.svg").write_text(svg_text(FRAMED), encoding="utf-8")
-    (macos / "icon.svg").write_text(
-        svg_text(FULL, "Full-bleed; macOS applies the squircle. Same art as etc/fileman.svg without the outer frame."),
-        encoding="utf-8",
-    )
-    (macos / "icon.png").write_bytes(png_bytes(1024, 1024, full_1024, rgb=True))
+    (macos / "icon.svg").write_text(glass_svg(FULL), encoding="utf-8")
+    (macos / "icon.png").write_bytes(png_bytes(1024, 1024, glass_1024, rgb=True))
     ico_sizes = (16, 24, 32, 48, 64, 128, 256)
     ico_images = []
     for size in ico_sizes:
-        rgba = framed_256 if size == 256 else render(size, FRAMED)
+        rgba = windows_256 if size == 256 else render_windows(size, FRAMED)
         ico_images.append((size, png_bytes(size, size, rgba)))
     (windows / "icon.ico").write_bytes(ico_bytes(ico_images))
     print("wrote etc/fileman.svg, etc/macos/icon.svg, etc/macos/icon.png, etc/windows/icon.ico")
